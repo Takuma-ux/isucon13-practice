@@ -1,0 +1,13 @@
+# Go / Rust / Node などのビルド成果物・依存関係
+isupipe
+*.o
+*.a
+*.so
+node_modules/
+target/
+vendor/
+
+# ログ・一時ファイル
+*.log
+tmp/
+.DS_Store
