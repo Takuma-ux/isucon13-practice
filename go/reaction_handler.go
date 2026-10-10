@@ -155,10 +155,11 @@ func fillReactionResponse(ctx context.Context, tx *sqlx.Tx, reactionModel Reacti
 	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", reactionModel.LivestreamID); err != nil {
 		return Reaction{}, err
 	}
-	livestream, err := fillLivestreamResponse(ctx, tx, livestreamModel)
+	livestreams, err := fillLivestreamsResponse(ctx, tx, []*LivestreamModel{&livestreamModel})
 	if err != nil {
 		return Reaction{}, err
 	}
+	livestream := livestreams[0]
 
 	reaction := Reaction{
 		ID:         reactionModel.ID,

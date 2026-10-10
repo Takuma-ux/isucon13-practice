@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -158,10 +160,11 @@ func reserveLivestreamHandler(c echo.Context) error {
 		}
 	}
 
-	livestream, err := fillLivestreamResponse(ctx, tx, *livestreamModel)
+	livestreams, err := fillLivestreamsResponse(ctx, tx, []*LivestreamModel{livestreamModel})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
 	}
+	livestream := livestreams[0]
 
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
@@ -227,13 +230,9 @@ func searchLivestreamsHandler(c echo.Context) error {
 		}
 	}
 
-	livestreams := make([]Livestream, len(livestreamModels))
-	for i := range livestreamModels {
-		livestream, err := fillLivestreamResponse(ctx, tx, *livestreamModels[i])
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
-		}
-		livestreams[i] = livestream
+	livestreams, err := fillLivestreamsResponse(ctx, tx, livestreamModels)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -264,13 +263,9 @@ func getMyLivestreamsHandler(c echo.Context) error {
 	if err := tx.SelectContext(ctx, &livestreamModels, "SELECT * FROM livestreams WHERE user_id = ?", userID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
 	}
-	livestreams := make([]Livestream, len(livestreamModels))
-	for i := range livestreamModels {
-		livestream, err := fillLivestreamResponse(ctx, tx, *livestreamModels[i])
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
-		}
-		livestreams[i] = livestream
+	livestreams, err := fillLivestreamsResponse(ctx, tx, livestreamModels)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -307,13 +302,9 @@ func getUserLivestreamsHandler(c echo.Context) error {
 	if err := tx.SelectContext(ctx, &livestreamModels, "SELECT * FROM livestreams WHERE user_id = ?", user.ID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
 	}
-	livestreams := make([]Livestream, len(livestreamModels))
-	for i := range livestreamModels {
-		livestream, err := fillLivestreamResponse(ctx, tx, *livestreamModels[i])
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
-		}
-		livestreams[i] = livestream
+	livestreams, err := fillLivestreamsResponse(ctx, tx, livestreamModels)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -425,10 +416,11 @@ func getLivestreamHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
 	}
 
-	livestream, err := fillLivestreamResponse(ctx, tx, livestreamModel)
+	livestreams, err := fillLivestreamsResponse(ctx, tx, []*LivestreamModel{&livestreamModel})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
 	}
+	livestream := livestreams[0]
 
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
@@ -490,44 +482,260 @@ func getLivecommentReportsHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, reports)
 }
 
-func fillLivestreamResponse(ctx context.Context, tx *sqlx.Tx, livestreamModel LivestreamModel) (Livestream, error) {
-	ownerModel := UserModel{}
-	if err := tx.GetContext(ctx, &ownerModel, "SELECT * FROM users WHERE id = ?", livestreamModel.UserID); err != nil {
-		return Livestream{}, err
+// fillLivestreamsResponse は、削除した fillLivestreamResponse の一覧版。
+// 旧関数は配信1件ごとに users、theme、icon、livestream_tags、tags を SELECT してから Livestream を組み立てていた。
+// この関数は先に owner とタグを IN でまとめて取り、構造体の組み立てだけをループで行う。1件のときもこの関数にスライスで渡す。
+//
+// @params
+//   - ctx: リクエストの context。キャンセルされると SELECT を中断する
+//   - tx: この取得に使うトランザクション
+//   - livestreamModels: 埋める配信。1件取得も長さ1のスライスで渡す。0件なら SQL を出さない
+//
+// @return
+//   - []Livestream: 引数と同じ順の API 用配信。失敗時は nil
+//   - error: owner またはタグの取得に失敗したとき
+func fillLivestreamsResponse(ctx context.Context, tx *sqlx.Tx, livestreamModels []*LivestreamModel) ([]Livestream, error) {
+	// 戻り値の並びは引数と同じ。0件のときはこの後の IN を出さない。
+	livestreams := make([]Livestream, len(livestreamModels))
+	if len(livestreamModels) == 0 {
+		return livestreams, nil
 	}
-	owner, err := fillUserResponse(ctx, tx, ownerModel)
+
+	// SQL は出さない。配信から owner の user ID と配信 ID を集めるだけ。
+	userIDs := make([]int64, 0, len(livestreamModels))
+	livestreamIDs := make([]int64, 0, len(livestreamModels))
+	for _, livestreamModel := range livestreamModels {
+		userIDs = append(userIDs, livestreamModel.UserID)
+		livestreamIDs = append(livestreamIDs, livestreamModel.ID)
+	}
+	// 同じ owner の配信が複数あっても、users / themes / icons は1人につき1回にする。
+	userIDs = uniqueInt64(userIDs)
+
+	// 旧関数が配信ごとに出していた users、theme、icon の SELECT をまとめて取る。
+	owners, err := fillUsersByIDs(ctx, tx, userIDs)
 	if err != nil {
-		return Livestream{}, err
+		return nil, err
+	}
+	// 旧関数が配信ごとに出していた livestream_tags と tags の SELECT をまとめて取る。
+	tagsByLivestream, err := tagsByLivestreamID(ctx, tx, livestreamIDs)
+	if err != nil {
+		return nil, err
 	}
 
-	var livestreamTagModels []*LivestreamTagModel
-	if err := tx.SelectContext(ctx, &livestreamTagModels, "SELECT * FROM livestream_tags WHERE livestream_id = ?", livestreamModel.ID); err != nil {
-		return Livestream{}, err
-	}
-
-	tags := make([]Tag, len(livestreamTagModels))
-	for i := range livestreamTagModels {
-		tagModel := TagModel{}
-		if err := tx.GetContext(ctx, &tagModel, "SELECT * FROM tags WHERE id = ?", livestreamTagModels[i].TagID); err != nil {
-			return Livestream{}, err
+	// 旧関数の最後と同じ構造体を、引数の順に作る。このループでは SQL を出さない。
+	for i, livestreamModel := range livestreamModels {
+		owner, ok := owners[livestreamModel.UserID]
+		if !ok {
+			return nil, fmt.Errorf("user not found: %d", livestreamModel.UserID)
 		}
+		tags := tagsByLivestream[livestreamModel.ID]
+		// tagsByLivestreamID は空スライスを入れる。取りこぼしたときだけ JSON が null にならないよう [] にする。
+		if tags == nil {
+			tags = []Tag{}
+		}
+		livestreams[i] = Livestream{
+			ID:           livestreamModel.ID,
+			Owner:        owner,
+			Title:        livestreamModel.Title,
+			Tags:         tags,
+			Description:  livestreamModel.Description,
+			PlaylistUrl:  livestreamModel.PlaylistUrl,
+			ThumbnailUrl: livestreamModel.ThumbnailUrl,
+			StartAt:      livestreamModel.StartAt,
+			EndAt:        livestreamModel.EndAt,
+		}
+	}
+	return livestreams, nil
+}
 
-		tags[i] = Tag{
+// fillUsersByIDs は、旧 fillLivestreamResponse 内の owner 取得と fillUserResponse（theme と icon）を user ID の IN にまとめる。
+// icons に行が無いユーザーは NoImage.jpg のハッシュを使う。
+//
+// @params
+//   - ctx: リクエストの context。キャンセルされると SELECT を中断する
+//   - tx: この取得に使うトランザクション
+//   - userIDs: owner の user ID。重複は呼び出し側で除いてある。0件なら SQL を出さない
+//
+// @return
+//   - map[int64]User: user ID から API 用 User。失敗時は nil
+//   - error: user または theme が欠けているとき、または SELECT に失敗したとき
+func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int64]User, error) {
+	users := make(map[int64]User, len(userIDs))
+	if len(userIDs) == 0 {
+		return users, nil
+	}
+
+	// 旧: 配信ごとに SELECT * FROM users WHERE id = ?
+	// 今: 集めた user ID を IN に渡し、owner 行を1回で取る。
+	var userModels []UserModel
+	if err := selectIn(ctx, tx, &userModels, "SELECT * FROM users WHERE id IN (?)", userIDs); err != nil {
+		return nil, err
+	}
+	// 旧 GetContext は行が無いと sql.ErrNoRows。IN は欠落をエラーにしないので、件数で同じ失敗にする。
+	if len(userModels) != len(userIDs) {
+		return nil, sql.ErrNoRows
+	}
+
+	// 旧 fillUserResponse の SELECT * FROM themes WHERE user_id = ? を、user ID の IN 1回にする。
+	var themeModels []ThemeModel
+	if err := selectIn(ctx, tx, &themeModels, "SELECT * FROM themes WHERE user_id IN (?)", userIDs); err != nil {
+		return nil, err
+	}
+	// 後のループが user ID で引けるようにする。SQL は出さない。
+	themeByUserID := make(map[int64]ThemeModel, len(themeModels))
+	for _, themeModel := range themeModels {
+		themeByUserID[themeModel.UserID] = themeModel
+	}
+
+	// 旧 fillUserResponse の SELECT image FROM icons WHERE user_id = ? を、user ID の IN 1回にする。
+	// 画像本体が要るので、users の SELECT * には含めず iconImageModel で user_id と image だけ受ける。
+	var iconModels []iconImageModel
+	if err := selectIn(ctx, tx, &iconModels, "SELECT user_id, image FROM icons WHERE user_id IN (?)", userIDs); err != nil {
+		return nil, err
+	}
+	iconByUserID := make(map[int64][]byte, len(iconModels))
+	for _, iconModel := range iconModels {
+		iconByUserID[iconModel.UserID] = iconModel.Image
+	}
+
+	// 旧 fillUserResponse と同じ組み立て。theme と icon は上の map から取り、ここでは SQL を出さない。
+	var fallback []byte
+	for _, userModel := range userModels {
+		themeModel, ok := themeByUserID[userModel.ID]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		image, ok := iconByUserID[userModel.ID]
+		if !ok {
+			// 旧コードと同じく、icons に行が無いときだけ NoImage.jpg を読む。ファイルは全員で1回。
+			if fallback == nil {
+				var err error
+				fallback, err = os.ReadFile(fallbackImage)
+				if err != nil {
+					return nil, err
+				}
+			}
+			image = fallback
+		}
+		iconHash := sha256.Sum256(image)
+		users[userModel.ID] = User{
+			ID:          userModel.ID,
+			Name:        userModel.Name,
+			DisplayName: userModel.DisplayName,
+			Description: userModel.Description,
+			Theme: Theme{
+				ID:       themeModel.ID,
+				DarkMode: themeModel.DarkMode,
+			},
+			IconHash: fmt.Sprintf("%x", iconHash),
+		}
+	}
+	return users, nil
+}
+
+// tagsByLivestreamID は、旧 fillLivestreamResponse 内のタグ取得を配信 ID の IN にまとめる。
+// 旧関数は配信ごとに livestream_tags を取り、その行ごとに tags を SELECT していた。
+//
+// @params
+//   - ctx: リクエストの context。キャンセルされると SELECT を中断する
+//   - tx: この取得に使うトランザクション
+//   - livestreamIDs: タグを埋める配信 ID。0件なら SQL を出さない
+//
+// @return
+//   - map[int64][]Tag: 配信 ID からタグ配列。タグが無い配信は空スライス。失敗時は nil
+//   - error: タグ ID に対応する tags 行が無いとき、または SELECT に失敗したとき
+func tagsByLivestreamID(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (map[int64][]Tag, error) {
+	// タグが0件の配信も JSON が [] になるよう、先に空スライスを入れる。nil だと null になる。
+	tags := make(map[int64][]Tag, len(livestreamIDs))
+	for _, livestreamID := range livestreamIDs {
+		tags[livestreamID] = []Tag{}
+	}
+	if len(livestreamIDs) == 0 {
+		return tags, nil
+	}
+
+	// 旧: 配信ごとに SELECT * FROM livestream_tags WHERE livestream_id = ?
+	// 今: 配信 ID を IN に渡し、紐づきを1回で取る。ORDER BY id は旧 SELECT * の主キー順に合わせる。
+	var livestreamTagModels []*LivestreamTagModel
+	if err := selectIn(ctx, tx, &livestreamTagModels, "SELECT * FROM livestream_tags WHERE livestream_id IN (?) ORDER BY id", livestreamIDs); err != nil {
+		return nil, err
+	}
+	if len(livestreamTagModels) == 0 {
+		return tags, nil
+	}
+
+	// 紐づきから tag ID を集める。同じタグが複数配信についていても tags は1回で取る。
+	tagIDs := make([]int64, 0, len(livestreamTagModels))
+	for _, livestreamTagModel := range livestreamTagModels {
+		tagIDs = append(tagIDs, livestreamTagModel.TagID)
+	}
+	tagIDs = uniqueInt64(tagIDs)
+
+	// 旧: タグ1件ごとに SELECT * FROM tags WHERE id = ?
+	var tagModels []TagModel
+	if err := selectIn(ctx, tx, &tagModels, "SELECT * FROM tags WHERE id IN (?)", tagIDs); err != nil {
+		return nil, err
+	}
+	tagByID := make(map[int64]TagModel, len(tagModels))
+	for _, tagModel := range tagModels {
+		tagByID[tagModel.ID] = tagModel
+	}
+
+	// livestream_tags の id 順のまま、配信 ID ごとの配列へ足す。ここでは SQL を出さない。
+	for _, livestreamTagModel := range livestreamTagModels {
+		tagModel, ok := tagByID[livestreamTagModel.TagID]
+		if !ok {
+			// 旧 GetContext が sql.ErrNoRows になる欠落と同じ失敗にする。
+			return nil, sql.ErrNoRows
+		}
+		tags[livestreamTagModel.LivestreamID] = append(tags[livestreamTagModel.LivestreamID], Tag{
 			ID:   tagModel.ID,
 			Name: tagModel.Name,
-		}
+		})
 	}
+	return tags, nil
+}
 
-	livestream := Livestream{
-		ID:           livestreamModel.ID,
-		Owner:        owner,
-		Title:        livestreamModel.Title,
-		Tags:         tags,
-		Description:  livestreamModel.Description,
-		PlaylistUrl:  livestreamModel.PlaylistUrl,
-		ThumbnailUrl: livestreamModel.ThumbnailUrl,
-		StartAt:      livestreamModel.StartAt,
-		EndAt:        livestreamModel.EndAt,
+// iconImageModel は icons から user_id と image だけを受ける。SELECT user_id, image のスキャン先。
+//
+// @params
+//   - UserID: icons.user_id
+//   - Image: icons.image。行が無いユーザーはこの構造体に入らない
+type iconImageModel struct {
+	UserID int64  `db:"user_id"`
+	Image  []byte `db:"image"`
+}
+
+func uniqueInt64(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
 	}
-	return livestream, nil
+	return out
+}
+
+// selectIn は IN (?) を ID の個数だけ広げ、その SELECT を1回実行して dest にスキャンする。
+// sqlx.In はまだクエリを実行しない。Rebind のあと SelectContext が実行する。
+//
+// @params
+//   - ctx: リクエストの context。キャンセルされると SELECT を中断する
+//   - tx: この取得に使うトランザクション
+//   - dest: 結果のスキャン先。呼び出し側が型 T のスライスを渡す
+//   - query: IN (?) を1つ含む SQL。実行前の文字列
+//   - ids: IN に入れる ID。空だと sqlx.In がエラーになる
+//
+// @return
+//   - error: SQL の組み立てか実行に失敗したとき。0件はエラーにしない
+func selectIn[T any](ctx context.Context, tx *sqlx.Tx, dest *[]T, query string, ids []int64) error {
+	q, args, err := sqlx.In(query, ids)
+	if err != nil {
+		return err
+	}
+	q = tx.Rebind(q)
+	return tx.SelectContext(ctx, dest, q, args...)
 }
