@@ -69,6 +69,7 @@ type ReservationSlotModel struct {
 
 func reserveLivestreamHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	defer c.Request().Body.Close()
 
 	if err := verifyUserSession(c); err != nil {
@@ -172,6 +173,7 @@ func reserveLivestreamHandler(c echo.Context) error {
 
 func searchLivestreamsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	keyTagName := c.QueryParam("tag")
 
 	tx, err := dbConn.BeginTxx(ctx, nil)
@@ -245,6 +247,7 @@ func searchLivestreamsHandler(c echo.Context) error {
 
 func getMyLivestreamsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	if err := verifyUserSession(c); err != nil {
 		return err
 	}
@@ -282,6 +285,7 @@ func getMyLivestreamsHandler(c echo.Context) error {
 
 func getUserLivestreamsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	if err := verifyUserSession(c); err != nil {
 		return err
 	}
@@ -326,6 +330,7 @@ func getUserLivestreamsHandler(c echo.Context) error {
 // viewerテーブルの廃止
 func enterLivestreamHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力
 		return err
@@ -366,6 +371,7 @@ func enterLivestreamHandler(c echo.Context) error {
 
 func exitLivestreamHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力
 		return err
@@ -400,6 +406,7 @@ func exitLivestreamHandler(c echo.Context) error {
 
 func getLivestreamHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		return err
@@ -439,6 +446,7 @@ func getLivestreamHandler(c echo.Context) error {
 
 func getLivecommentReportsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		return err
@@ -491,6 +499,10 @@ func getLivecommentReportsHandler(c echo.Context) error {
 }
 
 func fillLivestreamResponse(ctx context.Context, tx *sqlx.Tx, livestreamModel LivestreamModel) (Livestream, error) {
+	if cached, ok := getLivestreamFromCache(ctx, livestreamModel.ID); ok {
+		return *cached, nil
+	}
+
 	ownerModel := UserModel{}
 	if err := tx.GetContext(ctx, &ownerModel, "SELECT * FROM users WHERE id = ?", livestreamModel.UserID); err != nil {
 		return Livestream{}, err
@@ -529,5 +541,7 @@ func fillLivestreamResponse(ctx context.Context, tx *sqlx.Tx, livestreamModel Li
 		StartAt:      livestreamModel.StartAt,
 		EndAt:        livestreamModel.EndAt,
 	}
+
+	cacheLivestream(ctx, livestreamModel.ID, &livestream)
 	return livestream, nil
 }

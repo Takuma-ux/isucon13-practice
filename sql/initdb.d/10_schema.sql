@@ -24,6 +24,7 @@ CREATE TABLE `themes` (
   `user_id` BIGINT NOT NULL,
   `dark_mode` BOOLEAN NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE INDEX idx_themes_user_id ON themes (`user_id`);
 
 -- ライブ配信
 CREATE TABLE `livestreams` (
@@ -36,6 +37,7 @@ CREATE TABLE `livestreams` (
   `start_at` BIGINT NOT NULL,
   `end_at` BIGINT NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE INDEX idx_livestreams_user_id ON livestreams (`user_id`);
 
 -- ライブ配信予約枠
 CREATE TABLE `reservation_slots` (
@@ -58,6 +60,8 @@ CREATE TABLE `livestream_tags` (
   `livestream_id` BIGINT NOT NULL,
   `tag_id` BIGINT NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE INDEX idx_livestream_tags_livestream_id ON livestream_tags (`livestream_id`);
+CREATE INDEX idx_livestream_tags_tag_id ON livestream_tags (`tag_id`);
 
 -- ライブ配信視聴履歴
 CREATE TABLE `livestream_viewers_history` (
@@ -66,6 +70,7 @@ CREATE TABLE `livestream_viewers_history` (
   `livestream_id` BIGINT NOT NULL,
   `created_at` BIGINT NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE INDEX idx_livestream_viewers_history_livestream_id ON livestream_viewers_history (`livestream_id`);
 
 -- ライブ配信に対するライブコメント
 CREATE TABLE `livecomments` (
@@ -76,6 +81,7 @@ CREATE TABLE `livecomments` (
   `tip` BIGINT NOT NULL DEFAULT 0,
   `created_at` BIGINT NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE INDEX idx_livecomments_livestream_id_created_at ON livecomments (`livestream_id`, `created_at`);
 
 -- ユーザからのライブコメントのスパム報告
 CREATE TABLE `livecomment_reports` (
@@ -85,6 +91,7 @@ CREATE TABLE `livecomment_reports` (
   `livecomment_id` BIGINT NOT NULL,
   `created_at` BIGINT NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE INDEX idx_livecomment_reports_livestream_id ON livecomment_reports (`livestream_id`);
 
 -- 配信者からのNGワード登録
 CREATE TABLE `ng_words` (
@@ -95,6 +102,7 @@ CREATE TABLE `ng_words` (
   `created_at` BIGINT NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 CREATE INDEX ng_words_word ON ng_words(`word`);
+CREATE INDEX idx_ng_words_user_id_livestream_id ON ng_words (`user_id`, `livestream_id`);
 
 -- ライブ配信に対するリアクション
 CREATE TABLE `reactions` (
@@ -105,3 +113,4 @@ CREATE TABLE `reactions` (
   `emoji_name` VARCHAR(255) NOT NULL,
   `created_at` BIGINT NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE INDEX idx_reactions_livestream_id_created_at ON reactions (`livestream_id`, `created_at`);

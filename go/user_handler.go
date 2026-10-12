@@ -87,6 +87,7 @@ type PostIconResponse struct {
 
 func getIconHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	username := c.Param("username")
 
@@ -118,6 +119,7 @@ func getIconHandler(c echo.Context) error {
 
 func postIconHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力
@@ -165,6 +167,7 @@ func postIconHandler(c echo.Context) error {
 
 func getMeHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力
@@ -207,6 +210,7 @@ func getMeHandler(c echo.Context) error {
 // POST /api/register
 func registerHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	defer c.Request().Body.Close()
 
 	req := PostUserRequest{}
@@ -276,6 +280,7 @@ func registerHandler(c echo.Context) error {
 // POST /api/login
 func loginHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	defer c.Request().Body.Close()
 
 	req := LoginRequest{}
@@ -341,6 +346,7 @@ func loginHandler(c echo.Context) error {
 // GET /api/user/:username
 func getUserHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力
 		return err
@@ -398,7 +404,58 @@ func verifyUserSession(c echo.Context) error {
 	return nil
 }
 
+// responseCache holds per-request cached response objects to avoid
+// redundant database reads and SHA-256 icon hashing for the same user
+// or livestream appearing multiple times in a nested response.
+type responseCache struct {
+	users       map[int64]*User
+	livestreams map[int64]*Livestream
+}
+
+type responseCacheKey struct{}
+
+func withResponseCache(ctx context.Context) context.Context {
+	return context.WithValue(ctx, responseCacheKey{}, &responseCache{
+		users:       make(map[int64]*User),
+		livestreams: make(map[int64]*Livestream),
+	})
+}
+
+func getUserFromCache(ctx context.Context, id int64) (*User, bool) {
+	if v := ctx.Value(responseCacheKey{}); v != nil {
+		if u, ok := v.(*responseCache).users[id]; ok {
+			return u, true
+		}
+	}
+	return nil, false
+}
+
+func cacheUser(ctx context.Context, id int64, user *User) {
+	if v := ctx.Value(responseCacheKey{}); v != nil {
+		v.(*responseCache).users[id] = user
+	}
+}
+
+func getLivestreamFromCache(ctx context.Context, id int64) (*Livestream, bool) {
+	if v := ctx.Value(responseCacheKey{}); v != nil {
+		if l, ok := v.(*responseCache).livestreams[id]; ok {
+			return l, true
+		}
+	}
+	return nil, false
+}
+
+func cacheLivestream(ctx context.Context, id int64, livestream *Livestream) {
+	if v := ctx.Value(responseCacheKey{}); v != nil {
+		v.(*responseCache).livestreams[id] = livestream
+	}
+}
+
 func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (User, error) {
+	if cached, ok := getUserFromCache(ctx, userModel.ID); ok {
+		return *cached, nil
+	}
+
 	themeModel := ThemeModel{}
 	if err := tx.GetContext(ctx, &themeModel, "SELECT * FROM themes WHERE user_id = ?", userModel.ID); err != nil {
 		return User{}, err
@@ -428,5 +485,6 @@ func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (Us
 		IconHash: fmt.Sprintf("%x", iconHash),
 	}
 
+	cacheUser(ctx, userModel.ID, &user)
 	return user, nil
 }

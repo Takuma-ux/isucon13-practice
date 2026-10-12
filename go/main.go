@@ -98,7 +98,7 @@ func connectDB(logger echo.Logger) (*sqlx.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(10)
+	db.SetMaxOpenConns(50)
 
 	if err := db.Ping(); err != nil {
 		return nil, err
@@ -121,8 +121,8 @@ func initializeHandler(c echo.Context) error {
 
 func main() {
 	e := echo.New()
-	e.Debug = true
-	e.Logger.SetLevel(echolog.DEBUG)
+	e.Debug = false
+	e.Logger.SetLevel(echolog.INFO)
 	e.Use(middleware.Logger())
 	cookieStore := sessions.NewCookieStore(secret)
 	cookieStore.Options.Domain = "*.u.isucon.local"

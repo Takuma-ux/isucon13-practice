@@ -12,6 +12,7 @@ type PaymentResult struct {
 
 func GetPaymentResult(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
