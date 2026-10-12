@@ -24,6 +24,7 @@ type TagsResponse struct {
 
 func getTagHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
@@ -56,6 +57,7 @@ func getTagHandler(c echo.Context) error {
 // GET /api/user/:username/theme
 func getStreamerThemeHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力

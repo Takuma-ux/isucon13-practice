@@ -71,6 +71,7 @@ type ReservationSlotModel struct {
 
 func reserveLivestreamHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	defer c.Request().Body.Close()
 
 	if err := verifyUserSession(c); err != nil {
@@ -175,6 +176,7 @@ func reserveLivestreamHandler(c echo.Context) error {
 
 func searchLivestreamsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	keyTagName := c.QueryParam("tag")
 
 	tx, err := dbConn.BeginTxx(ctx, nil)
@@ -244,6 +246,7 @@ func searchLivestreamsHandler(c echo.Context) error {
 
 func getMyLivestreamsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	if err := verifyUserSession(c); err != nil {
 		return err
 	}
@@ -277,6 +280,7 @@ func getMyLivestreamsHandler(c echo.Context) error {
 
 func getUserLivestreamsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	if err := verifyUserSession(c); err != nil {
 		return err
 	}
@@ -317,6 +321,7 @@ func getUserLivestreamsHandler(c echo.Context) error {
 // viewerテーブルの廃止
 func enterLivestreamHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力
 		return err
@@ -357,6 +362,7 @@ func enterLivestreamHandler(c echo.Context) error {
 
 func exitLivestreamHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力
 		return err
@@ -391,6 +397,7 @@ func exitLivestreamHandler(c echo.Context) error {
 
 func getLivestreamHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		return err
@@ -431,6 +438,7 @@ func getLivestreamHandler(c echo.Context) error {
 
 func getLivecommentReportsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		return err
@@ -544,6 +552,7 @@ func fillLivestreamsResponse(ctx context.Context, tx *sqlx.Tx, livestreamModels 
 			StartAt:      livestreamModel.StartAt,
 			EndAt:        livestreamModel.EndAt,
 		}
+		cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
 	}
 	return livestreams, nil
 }

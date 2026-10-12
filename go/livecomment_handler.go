@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -67,6 +68,7 @@ type NGWord struct {
 
 func getLivecommentsHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力
@@ -116,6 +118,7 @@ func getLivecommentsHandler(c echo.Context) error {
 
 func getNgwords(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		return err
@@ -155,6 +158,7 @@ func getNgwords(c echo.Context) error {
 
 func postLivecommentHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	defer c.Request().Body.Close()
 
 	if err := verifyUserSession(c); err != nil {
@@ -191,27 +195,14 @@ func postLivecommentHandler(c echo.Context) error {
 		}
 	}
 
-	// スパム判定
+	// スパム判定 (Go側でstrings.Containsを使い、DBクエリを削減)
 	var ngwords []*NGWord
 	if err := tx.SelectContext(ctx, &ngwords, "SELECT id, user_id, livestream_id, word FROM ng_words WHERE user_id = ? AND livestream_id = ?", livestreamModel.UserID, livestreamModel.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get NG words: "+err.Error())
 	}
 
-	var hitSpam int
 	for _, ngword := range ngwords {
-		query := `
-		SELECT COUNT(*)
-		FROM
-		(SELECT ? AS text) AS texts
-		INNER JOIN
-		(SELECT CONCAT('%', ?, '%')	AS pattern) AS patterns
-		ON texts.text LIKE patterns.pattern;
-		`
-		if err := tx.GetContext(ctx, &hitSpam, query, req.Comment, ngword.Word); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get hitspam: "+err.Error())
-		}
-		c.Logger().Infof("[hitSpam=%d] comment = %s", hitSpam, req.Comment)
-		if hitSpam >= 1 {
+		if strings.Contains(req.Comment, ngword.Word) {
 			return echo.NewHTTPError(http.StatusBadRequest, "このコメントがスパム判定されました")
 		}
 	}
@@ -250,6 +241,7 @@ func postLivecommentHandler(c echo.Context) error {
 
 func reportLivecommentHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 
 	if err := verifyUserSession(c); err != nil {
 		return err
@@ -325,6 +317,7 @@ func reportLivecommentHandler(c echo.Context) error {
 // NGワードを登録
 func moderateHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
 	defer c.Request().Body.Close()
 
 	if err := verifyUserSession(c); err != nil {
@@ -376,20 +369,18 @@ func moderateHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted NG word id: "+err.Error())
 	}
 
-	var ngwords []*NGWord
-	if err := tx.SelectContext(ctx, &ngwords, "SELECT * FROM ng_words WHERE livestream_id = ?", livestreamID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get NG words: "+err.Error())
-	}
-
-	// NGワードにヒットする過去の投稿も全削除する（当該配信のみ、ワードごとに1回 DELETE）
-	for _, ngword := range ngwords {
-		query := `
-		DELETE FROM livecomments
-		WHERE livestream_id = ? AND comment LIKE CONCAT('%', ?, '%')
-		`
-		if _, err := tx.ExecContext(ctx, query, livestreamID, ngword.Word); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old livecomments that hit spams: "+err.Error())
-		}
+	// NGワードにヒットする過去の投稿も全削除する（当該配信の全 NG ワードを 1 回の DELETE）
+	deleteQuery := `
+	DELETE lc FROM livecomments lc
+	WHERE lc.livestream_id = ?
+	AND EXISTS (
+		SELECT 1 FROM ng_words nw
+		WHERE nw.livestream_id = ?
+		AND lc.comment LIKE CONCAT('%', nw.word, '%')
+	)
+	`
+	if _, err := tx.ExecContext(ctx, deleteQuery, livestreamID, livestreamID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old livecomments that hit spams: "+err.Error())
 	}
 
 	if err := tx.Commit(); err != nil {
