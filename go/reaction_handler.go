@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -66,14 +67,9 @@ func getReactionsHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "failed to get reactions")
 	}
 
-	reactions := make([]Reaction, len(reactionModels))
-	for i := range reactionModels {
-		reaction, err := fillReactionResponse(ctx, tx, reactionModels[i])
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
-		}
-
-		reactions[i] = reaction
+	reactions, err := fillReactionsResponse(ctx, tx, reactionModels)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -141,33 +137,55 @@ func postReactionHandler(c echo.Context) error {
 	return c.JSON(http.StatusCreated, reaction)
 }
 
+// fillReactionsResponse は、リアクション一覧の User と配信 Livestream を IN でまとめて埋める。
+func fillReactionsResponse(ctx context.Context, tx *sqlx.Tx, reactionModels []ReactionModel) ([]Reaction, error) {
+	if len(reactionModels) == 0 {
+		return []Reaction{}, nil
+	}
+
+	userIDs := make([]int64, 0, len(reactionModels))
+	livestreamIDs := make([]int64, 0, len(reactionModels))
+	for _, m := range reactionModels {
+		userIDs = append(userIDs, m.UserID)
+		livestreamIDs = append(livestreamIDs, m.LivestreamID)
+	}
+	userIDs = uniqueInt64(userIDs)
+
+	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	livestreamByID, err := livestreamsByIDs(ctx, tx, livestreamIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	reactions := make([]Reaction, len(reactionModels))
+	for i, m := range reactionModels {
+		user, ok := usersByID[m.UserID]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		livestream, ok := livestreamByID[m.LivestreamID]
+		if !ok {
+			return nil, fmt.Errorf("livestream not found: %d", m.LivestreamID)
+		}
+		reactions[i] = Reaction{
+			ID:         m.ID,
+			EmojiName:  m.EmojiName,
+			User:       user,
+			Livestream: livestream,
+			CreatedAt:  m.CreatedAt,
+		}
+	}
+	return reactions, nil
+}
+
 func fillReactionResponse(ctx context.Context, tx *sqlx.Tx, reactionModel ReactionModel) (Reaction, error) {
-	userModel := UserModel{}
-	if err := tx.GetContext(ctx, &userModel, "SELECT * FROM users WHERE id = ?", reactionModel.UserID); err != nil {
-		return Reaction{}, err
-	}
-	user, err := fillUserResponse(ctx, tx, userModel)
+	reactions, err := fillReactionsResponse(ctx, tx, []ReactionModel{reactionModel})
 	if err != nil {
 		return Reaction{}, err
 	}
-
-	livestreamModel := LivestreamModel{}
-	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", reactionModel.LivestreamID); err != nil {
-		return Reaction{}, err
-	}
-	livestreams, err := fillLivestreamsResponse(ctx, tx, []*LivestreamModel{&livestreamModel})
-	if err != nil {
-		return Reaction{}, err
-	}
-	livestream := livestreams[0]
-
-	reaction := Reaction{
-		ID:         reactionModel.ID,
-		EmojiName:  reactionModel.EmojiName,
-		User:       user,
-		Livestream: livestream,
-		CreatedAt:  reactionModel.CreatedAt,
-	}
-
-	return reaction, nil
+	return reactions[0], nil
 }

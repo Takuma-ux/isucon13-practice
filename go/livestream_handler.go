@@ -548,6 +548,36 @@ func fillLivestreamsResponse(ctx context.Context, tx *sqlx.Tx, livestreamModels 
 	return livestreams, nil
 }
 
+// livestreamsByIDs は livestream ID の IN 取得と fillLivestreamsResponse を1回にまとめ、ID から引ける map を返す。
+// livestreamIDs に重複があっても uniqueInt64 する。
+func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (map[int64]Livestream, error) {
+	livestreamByID := make(map[int64]Livestream)
+	if len(livestreamIDs) == 0 {
+		return livestreamByID, nil
+	}
+	livestreamIDs = uniqueInt64(livestreamIDs)
+
+	var livestreamRowModels []LivestreamModel
+	if err := selectIn(ctx, tx, &livestreamRowModels, "SELECT * FROM livestreams WHERE id IN (?)", livestreamIDs); err != nil {
+		return nil, err
+	}
+	if len(livestreamRowModels) != len(livestreamIDs) {
+		return nil, sql.ErrNoRows
+	}
+	livestreamPtrs := make([]*LivestreamModel, len(livestreamRowModels))
+	for i := range livestreamRowModels {
+		livestreamPtrs[i] = &livestreamRowModels[i]
+	}
+	livestreams, err := fillLivestreamsResponse(ctx, tx, livestreamPtrs)
+	if err != nil {
+		return nil, err
+	}
+	for _, ls := range livestreams {
+		livestreamByID[ls.ID] = ls
+	}
+	return livestreamByID, nil
+}
+
 // fillUsersByIDs は、旧 fillLivestreamResponse 内の owner 取得と fillUserResponse（theme と icon）を user ID の IN にまとめる。
 // icons に行が無いユーザーは NoImage.jpg のハッシュを使う。
 //

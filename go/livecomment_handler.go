@@ -102,14 +102,9 @@ func getLivecommentsHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livecomments: "+err.Error())
 	}
 
-	livecomments := make([]Livecomment, len(livecommentModels))
-	for i := range livecommentModels {
-		livecomment, err := fillLivecommentResponse(ctx, tx, livecommentModels[i])
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fil livecomments: "+err.Error())
-		}
-
-		livecomments[i] = livecomment
+	livecomments, err := fillLivecommentsResponse(ctx, tx, livecommentModels)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fil livecomments: "+err.Error())
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -406,36 +401,59 @@ func moderateHandler(c echo.Context) error {
 	})
 }
 
+// fillLivecommentsResponse は、コメント一覧の投稿者 User と配信 Livestream を IN でまとめて埋める。
+// 1件だけ必要なときは fillLivecommentResponse がこの関数を1件スライスで呼ぶ。
+func fillLivecommentsResponse(ctx context.Context, tx *sqlx.Tx, livecommentModels []LivecommentModel) ([]Livecomment, error) {
+	if len(livecommentModels) == 0 {
+		return []Livecomment{}, nil
+	}
+
+	userIDs := make([]int64, 0, len(livecommentModels))
+	livestreamIDs := make([]int64, 0, len(livecommentModels))
+	for _, m := range livecommentModels {
+		userIDs = append(userIDs, m.UserID)
+		livestreamIDs = append(livestreamIDs, m.LivestreamID)
+	}
+	userIDs = uniqueInt64(userIDs)
+
+	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	livestreamByID, err := livestreamsByIDs(ctx, tx, livestreamIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	livecomments := make([]Livecomment, len(livecommentModels))
+	for i, m := range livecommentModels {
+		user, ok := usersByID[m.UserID]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		livestream, ok := livestreamByID[m.LivestreamID]
+		if !ok {
+			return nil, fmt.Errorf("livestream not found: %d", m.LivestreamID)
+		}
+		livecomments[i] = Livecomment{
+			ID:         m.ID,
+			User:       user,
+			Livestream: livestream,
+			Comment:    m.Comment,
+			Tip:        m.Tip,
+			CreatedAt:  m.CreatedAt,
+		}
+	}
+	return livecomments, nil
+}
+
 func fillLivecommentResponse(ctx context.Context, tx *sqlx.Tx, livecommentModel LivecommentModel) (Livecomment, error) {
-	commentOwnerModel := UserModel{}
-	if err := tx.GetContext(ctx, &commentOwnerModel, "SELECT * FROM users WHERE id = ?", livecommentModel.UserID); err != nil {
-		return Livecomment{}, err
-	}
-	commentOwner, err := fillUserResponse(ctx, tx, commentOwnerModel)
+	livecomments, err := fillLivecommentsResponse(ctx, tx, []LivecommentModel{livecommentModel})
 	if err != nil {
 		return Livecomment{}, err
 	}
-
-	livestreamModel := LivestreamModel{}
-	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livecommentModel.LivestreamID); err != nil {
-		return Livecomment{}, err
-	}
-	livestreams, err := fillLivestreamsResponse(ctx, tx, []*LivestreamModel{&livestreamModel})
-	if err != nil {
-		return Livecomment{}, err
-	}
-	livestream := livestreams[0]
-
-	livecomment := Livecomment{
-		ID:         livecommentModel.ID,
-		User:       commentOwner,
-		Livestream: livestream,
-		Comment:    livecommentModel.Comment,
-		Tip:        livecommentModel.Tip,
-		CreatedAt:  livecommentModel.CreatedAt,
-	}
-
-	return livecomment, nil
+	return livecomments[0], nil
 }
 
 func fillLivecommentReportResponse(ctx context.Context, tx *sqlx.Tx, reportModel LivecommentReportModel) (LivecommentReport, error) {
