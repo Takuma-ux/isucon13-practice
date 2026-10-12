@@ -24,6 +24,12 @@ type LivestreamRankingEntry struct {
 }
 type LivestreamRanking []LivestreamRankingEntry
 
+type livestreamRankingScoreModel struct {
+	LivestreamID int64 `db:"livestream_id"`
+	Reactions    int64 `db:"reactions"`
+	Tips         int64 `db:"tips"`
+}
+
 func (r LivestreamRanking) Len() int      { return len(r) }
 func (r LivestreamRanking) Swap(i, j int) { r[i], r[j] = r[j], r[i] }
 func (r LivestreamRanking) Less(i, j int) bool {
@@ -231,28 +237,34 @@ func getLivestreamStatisticsHandler(c echo.Context) error {
 		}
 	}
 
-	var livestreams []*LivestreamModel
-	if err := tx.SelectContext(ctx, &livestreams, "SELECT * FROM livestreams"); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
+	// ランク算出（全配信のリアクション数・チップ合計を1クエリで集計）
+	var rankingRows []livestreamRankingScoreModel
+	rankingQuery := `
+	SELECT
+		l.id AS livestream_id,
+		IFNULL(rc.reaction_count, 0) AS reactions,
+		IFNULL(tc.tip_sum, 0) AS tips
+	FROM livestreams l
+	LEFT JOIN (
+		SELECT livestream_id, COUNT(*) AS reaction_count
+		FROM reactions
+		GROUP BY livestream_id
+	) rc ON rc.livestream_id = l.id
+	LEFT JOIN (
+		SELECT livestream_id, IFNULL(SUM(tip), 0) AS tip_sum
+		FROM livecomments
+		GROUP BY livestream_id
+	) tc ON tc.livestream_id = l.id
+	`
+	if err := tx.SelectContext(ctx, &rankingRows, rankingQuery); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream ranking scores: "+err.Error())
 	}
 
-	// ランク算出
 	var ranking LivestreamRanking
-	for _, livestream := range livestreams {
-		var reactions int64
-		if err := tx.GetContext(ctx, &reactions, "SELECT COUNT(*) FROM livestreams l INNER JOIN reactions r ON l.id = r.livestream_id WHERE l.id = ?", livestream.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to count reactions: "+err.Error())
-		}
-
-		var totalTips int64
-		if err := tx.GetContext(ctx, &totalTips, "SELECT IFNULL(SUM(l2.tip), 0) FROM livestreams l INNER JOIN livecomments l2 ON l.id = l2.livestream_id WHERE l.id = ?", livestream.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to count tips: "+err.Error())
-		}
-
-		score := reactions + totalTips
+	for _, row := range rankingRows {
 		ranking = append(ranking, LivestreamRankingEntry{
-			LivestreamID: livestream.ID,
-			Score:        score,
+			LivestreamID: row.LivestreamID,
+			Score:        row.Reactions + row.Tips,
 		})
 	}
 	sort.Sort(ranking)
