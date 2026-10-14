@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
@@ -474,13 +472,9 @@ func getLivecommentReportsHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livecomment reports: "+err.Error())
 	}
 
-	reports := make([]LivecommentReport, len(reportModels))
-	for i := range reportModels {
-		report, err := fillLivecommentReportResponse(ctx, tx, *reportModels[i])
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())
-		}
-		reports[i] = report
+	reports, err := fillLivecommentReportsResponse(ctx, tx, reportModels)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -626,37 +620,26 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 		themeByUserID[themeModel.UserID] = themeModel
 	}
 
-	// 旧 fillUserResponse の SELECT image FROM icons WHERE user_id = ? を、user ID の IN 1回にする。
-	// 画像本体が要るので、users の SELECT * には含めず iconImageModel で user_id と image だけ受ける。
-	var iconModels []iconImageModel
-	if err := selectIn(ctx, tx, &iconModels, "SELECT user_id, image FROM icons WHERE user_id IN (?)", userIDs); err != nil {
+	// 旧 fillUserResponse の SELECT icon_hash FROM icons WHERE user_id = ? を、user ID の IN 1回にする。
+	var iconModels []iconHashModel
+	if err := selectIn(ctx, tx, &iconModels, "SELECT user_id, icon_hash FROM icons WHERE user_id IN (?)", userIDs); err != nil {
 		return nil, err
 	}
-	iconByUserID := make(map[int64][]byte, len(iconModels))
+	iconHashByUserID := make(map[int64]string, len(iconModels))
 	for _, iconModel := range iconModels {
-		iconByUserID[iconModel.UserID] = iconModel.Image
+		iconHashByUserID[iconModel.UserID] = iconModel.IconHash
 	}
 
-	// 旧 fillUserResponse と同じ組み立て。theme と icon は上の map から取り、ここでは SQL を出さない。
-	var fallback []byte
+	// 旧 fillUserResponse と同じ組み立て。theme と icon_hash は上の map から取り、ここでは SQL を出さない。
 	for _, userModel := range userModels {
 		themeModel, ok := themeByUserID[userModel.ID]
 		if !ok {
 			return nil, sql.ErrNoRows
 		}
-		image, ok := iconByUserID[userModel.ID]
+		iconHash, ok := iconHashByUserID[userModel.ID]
 		if !ok {
-			// 旧コードと同じく、icons に行が無いときだけ NoImage.jpg を読む。ファイルは全員で1回。
-			if fallback == nil {
-				var err error
-				fallback, err = os.ReadFile(fallbackImage)
-				if err != nil {
-					return nil, err
-				}
-			}
-			image = fallback
+			iconHash = defaultIconHash
 		}
-		iconHash := sha256.Sum256(image)
 		users[userModel.ID] = User{
 			ID:          userModel.ID,
 			Name:        userModel.Name,
@@ -666,7 +649,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 				ID:       themeModel.ID,
 				DarkMode: themeModel.DarkMode,
 			},
-			IconHash: fmt.Sprintf("%x", iconHash),
+			IconHash: iconHash,
 		}
 	}
 	return users, nil
@@ -735,14 +718,14 @@ func tagsByLivestreamID(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64)
 	return tags, nil
 }
 
-// iconImageModel は icons から user_id と image だけを受ける。SELECT user_id, image のスキャン先。
+// iconHashModel は icons から user_id と icon_hash だけを受ける。SELECT user_id, icon_hash のスキャン先。
 //
 // @params
 //   - UserID: icons.user_id
-//   - Image: icons.image。行が無いユーザーはこの構造体に入らない
-type iconImageModel struct {
-	UserID int64  `db:"user_id"`
-	Image  []byte `db:"image"`
+//   - IconHash: icons.icon_hash。行が無いユーザーはこの構造体に入らない
+type iconHashModel struct {
+	UserID   int64  `db:"user_id"`
+	IconHash string `db:"icon_hash"`
 }
 
 func uniqueInt64(ids []int64) []int64 {

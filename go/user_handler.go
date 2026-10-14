@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +29,148 @@ const (
 )
 
 var fallbackImage = "../img/NoImage.jpg"
+
+// SHA-256 (lowercase hex) of ../img/NoImage.jpg; matches ISUCON13 official commentary.
+const defaultIconHash = "d9f8294e9d895f81ce62e73dc7d5dff862a4fa40bd4e0fecf53f7526a8edcac0"
+
+func hashIconBytes(image []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(image))
+}
+
+// ifNoneMatchSatisfied reports whether If-None-Match precludes sending a response body (RFC 9110 §13.1.2).
+// currentHash is the opaque-tag of the server's strong entity-tag (icon_hash hex).
+func ifNoneMatchSatisfied(ifNoneMatchHeader, currentHash string) bool {
+	tags := parseIfNoneMatchList(ifNoneMatchHeader)
+	if len(tags) == 0 {
+		return false
+	}
+	for _, tag := range tags {
+		if tag.wildcard {
+			return true
+		}
+		if entityTagMatchesForIfNoneMatch(tag, currentHash) {
+			return true
+		}
+	}
+	return false
+}
+
+type parsedEntityTag struct {
+	wildcard bool
+	weak     bool
+	opaque   string
+}
+
+func skipOWS(s string, i int) int {
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	return i
+}
+
+// parseIfNoneMatchList parses an If-None-Match field value (RFC 9110 §8.8.3).
+func parseIfNoneMatchList(header string) []parsedEntityTag {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return nil
+	}
+	if header == "*" {
+		return []parsedEntityTag{{wildcard: true}}
+	}
+
+	var tags []parsedEntityTag
+	i := 0
+	for {
+		i = skipOWS(header, i)
+		if i >= len(header) {
+			break
+		}
+		tag, ni, ok := parseIfNoneMatchEntityTag(header, i)
+		if !ok {
+			for ni = i + 1; ni < len(header) && header[ni] != ','; ni++ {
+			}
+			i = ni
+		} else {
+			tags = append(tags, tag)
+			i = ni
+		}
+		i = skipOWS(header, i)
+		if i >= len(header) {
+			break
+		}
+		if header[i] != ',' {
+			break
+		}
+		i++
+	}
+	return tags
+}
+
+func isEtagc(b byte) bool {
+	if b == '"' {
+		return false
+	}
+	if b == 0x21 {
+		return true
+	}
+	if b >= 0x23 && b <= 0x7e {
+		return true
+	}
+	return b >= 0x80 // obs-text
+}
+
+func opaqueTagCharsValid(opaque string) bool {
+	for i := 0; i < len(opaque); i++ {
+		if !isEtagc(opaque[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseIfNoneMatchEntityTag(s string, start int) (parsedEntityTag, int, bool) {
+	i := skipOWS(s, start)
+	if i >= len(s) {
+		return parsedEntityTag{}, start, false
+	}
+	weak := false
+	if strings.HasPrefix(s[i:], "W/") {
+		weak = true
+		i += 2
+		i = skipOWS(s, i)
+	}
+	if i >= len(s) || s[i] != '"' {
+		return parsedEntityTag{}, start, false
+	}
+	j := i + 1
+	for j < len(s) && s[j] != '"' {
+		j++
+	}
+	if j >= len(s) {
+		return parsedEntityTag{}, start, false
+	}
+	opaque := s[i+1 : j]
+	if !opaqueTagCharsValid(opaque) {
+		return parsedEntityTag{}, start, false
+	}
+	after := skipOWS(s, j+1)
+	if after < len(s) && s[after] != ',' {
+		return parsedEntityTag{}, start, false
+	}
+	return parsedEntityTag{weak: weak, opaque: opaque}, j + 1, true
+}
+
+// entityTagMatchesForIfNoneMatch compares the client's validator to the current strong entity-tag (RFC 9110 §8.8.3.2).
+func entityTagMatchesForIfNoneMatch(client parsedEntityTag, currentHash string) bool {
+	server := parsedEntityTag{opaque: currentHash}
+	return entityTagsWeakEquivalent(client, server)
+}
+
+func entityTagsWeakEquivalent(a, b parsedEntityTag) bool {
+	// RFC 9110 §8.8.3.2: strong comparison requires both strong tags; weak comparison uses opaque-tag only.
+	// Icon validators differ only by the weak prefix, so equality is opaque-tag equality in all cases here.
+	return a.opaque == b.opaque
+}
 
 type UserModel struct {
 	ID             int64  `db:"id"`
@@ -105,13 +247,25 @@ func getIconHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
 	}
 
+	ifNoneMatch := strings.TrimSpace(c.Request().Header.Get("If-None-Match"))
+	if ifNoneMatch != "" {
+		currentHash := defaultIconHash
+		if err := tx.GetContext(ctx, &currentHash, "SELECT icon_hash FROM icons WHERE user_id = ?", user.ID); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
+			}
+		}
+		if ifNoneMatchSatisfied(ifNoneMatch, currentHash) {
+			return c.NoContent(http.StatusNotModified)
+		}
+	}
+
 	var image []byte
 	if err := tx.GetContext(ctx, &image, "SELECT image FROM icons WHERE user_id = ?", user.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.File(fallbackImage)
-		} else {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 	}
 
 	return c.Blob(http.StatusOK, "image/jpeg", image)
@@ -146,7 +300,8 @@ func postIconHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old user icon: "+err.Error())
 	}
 
-	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image) VALUES (?, ?)", userID, req.Image)
+	iconHash := hashIconBytes(req.Image)
+	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image, icon_hash) VALUES (?, ?, ?)", userID, req.Image, iconHash)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new user icon: "+err.Error())
 	}
@@ -461,17 +616,12 @@ func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (Us
 		return User{}, err
 	}
 
-	var image []byte
-	if err := tx.GetContext(ctx, &image, "SELECT image FROM icons WHERE user_id = ?", userModel.ID); err != nil {
+	iconHash := defaultIconHash
+	if err := tx.GetContext(ctx, &iconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", userModel.ID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return User{}, err
 		}
-		image, err = os.ReadFile(fallbackImage)
-		if err != nil {
-			return User{}, err
-		}
 	}
-	iconHash := sha256.Sum256(image)
 
 	user := User{
 		ID:          userModel.ID,
@@ -482,7 +632,7 @@ func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (Us
 			ID:       themeModel.ID,
 			DarkMode: themeModel.DarkMode,
 		},
-		IconHash: fmt.Sprintf("%x", iconHash),
+		IconHash: iconHash,
 	}
 
 	cacheUser(ctx, userModel.ID, &user)

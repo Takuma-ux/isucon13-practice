@@ -227,7 +227,7 @@ func postLivecommentHandler(c echo.Context) error {
 	}
 	livecommentModel.ID = livecommentID
 
-	livecomment, err := fillLivecommentResponse(ctx, tx, livecommentModel)
+	livecomment, err := fillLivecommentResponseWithLivestream(ctx, tx, livecommentModel, livestreamModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment: "+err.Error())
 	}
@@ -445,6 +445,99 @@ func fillLivecommentResponse(ctx context.Context, tx *sqlx.Tx, livecommentModel 
 		return Livecomment{}, err
 	}
 	return livecomments[0], nil
+}
+
+// fillLivecommentResponseWithLivestream は POST コメント用。ハンドラが既に取得した livestream 行を
+// fillLivestreamsResponse に渡し、livestreamsByIDs による livestreams の再 SELECT を避ける。
+func fillLivecommentResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, livecommentModel LivecommentModel, livestreamModel LivestreamModel) (Livecomment, error) {
+	if livecommentModel.LivestreamID != livestreamModel.ID {
+		return Livecomment{}, fmt.Errorf("livestream not found: %d", livecommentModel.LivestreamID)
+	}
+
+	usersByID, err := fillUsersByIDs(ctx, tx, []int64{livecommentModel.UserID})
+	if err != nil {
+		return Livecomment{}, err
+	}
+
+	livestreams, err := fillLivestreamsResponse(ctx, tx, []*LivestreamModel{&livestreamModel})
+	if err != nil {
+		return Livecomment{}, err
+	}
+	if len(livestreams) != 1 {
+		return Livecomment{}, sql.ErrNoRows
+	}
+	livestream := livestreams[0]
+
+	user, ok := usersByID[livecommentModel.UserID]
+	if !ok {
+		return Livecomment{}, sql.ErrNoRows
+	}
+
+	return Livecomment{
+		ID:         livecommentModel.ID,
+		User:       user,
+		Livestream: livestream,
+		Comment:    livecommentModel.Comment,
+		Tip:        livecommentModel.Tip,
+		CreatedAt:  livecommentModel.CreatedAt,
+	}, nil
+}
+
+// fillLivecommentReportsResponse batches reporter and livecomment fills for report list GET.
+func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportModels []*LivecommentReportModel) ([]LivecommentReport, error) {
+	if len(reportModels) == 0 {
+		return []LivecommentReport{}, nil
+	}
+
+	reporterIDs := make([]int64, 0, len(reportModels))
+	livecommentIDs := make([]int64, 0, len(reportModels))
+	for _, rm := range reportModels {
+		reporterIDs = append(reporterIDs, rm.UserID)
+		livecommentIDs = append(livecommentIDs, rm.LivecommentID)
+	}
+	reporterIDs = uniqueInt64(reporterIDs)
+	livecommentIDs = uniqueInt64(livecommentIDs)
+
+	reportersByID, err := fillUsersByIDs(ctx, tx, reporterIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	var livecommentRowModels []LivecommentModel
+	if err := selectIn(ctx, tx, &livecommentRowModels, "SELECT * FROM livecomments WHERE id IN (?)", livecommentIDs); err != nil {
+		return nil, err
+	}
+	if len(livecommentRowModels) != len(livecommentIDs) {
+		return nil, sql.ErrNoRows
+	}
+
+	livecomments, err := fillLivecommentsResponse(ctx, tx, livecommentRowModels)
+	if err != nil {
+		return nil, err
+	}
+	livecommentByID := make(map[int64]Livecomment, len(livecomments))
+	for _, lc := range livecomments {
+		livecommentByID[lc.ID] = lc
+	}
+
+	reports := make([]LivecommentReport, len(reportModels))
+	for i, rm := range reportModels {
+		reporter, ok := reportersByID[rm.UserID]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		livecomment, ok := livecommentByID[rm.LivecommentID]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		reports[i] = LivecommentReport{
+			ID:          rm.ID,
+			Reporter:    reporter,
+			Livecomment: livecomment,
+			CreatedAt:   rm.CreatedAt,
+		}
+	}
+	return reports, nil
 }
 
 func fillLivecommentReportResponse(ctx context.Context, tx *sqlx.Tx, reportModel LivecommentReportModel) (LivecommentReport, error) {

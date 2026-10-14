@@ -1,5 +1,6 @@
 isupipe
 isupipe_darwin
+local.env
 
 # Created by https://www.toptal.com/developers/gitignore/api/go,macos,windows,linux
 # Edit at https://www.toptal.com/developers/gitignore?templates=go,macos,windows,linux
