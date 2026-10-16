@@ -303,34 +303,59 @@ func postIconHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "failed to decode the request body as json")
 	}
 
-	tx, err := dbConn.BeginTxx(ctx, nil)
+	iconID, err := withMySQLDeadlockRetryInt64(func() (int64, error) {
+		return postUserIcon(ctx, userID, req.Image)
+	})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx, "DELETE FROM icons WHERE user_id = ?", userID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old user icon: "+err.Error())
-	}
-
-	iconHash := hashIconBytes(req.Image)
-	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image, icon_hash) VALUES (?, ?, ?)", userID, req.Image, iconHash)
-	if err != nil {
+		if isMySQLDeadlock(err) {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new user icon: "+err.Error())
+		}
+		if strings.Contains(err.Error(), "begin transaction") {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
+		}
+		if strings.Contains(err.Error(), "delete old user icon") {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old user icon: "+err.Error())
+		}
+		if strings.Contains(err.Error(), "last inserted icon id") {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted icon id: "+err.Error())
+		}
+		if strings.Contains(err.Error(), "commit") {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new user icon: "+err.Error())
-	}
-
-	iconID, err := rs.LastInsertId()
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted icon id: "+err.Error())
-	}
-
-	if err := tx.Commit(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
 
 	return c.JSON(http.StatusCreated, &PostIconResponse{
 		ID: iconID,
 	})
+}
+
+func postUserIcon(ctx context.Context, userID int64, image []byte) (int64, error) {
+	tx, err := dbConn.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "DELETE FROM icons WHERE user_id = ?", userID); err != nil {
+		return 0, fmt.Errorf("failed to delete old user icon: %w", err)
+	}
+
+	iconHash := hashIconBytes(image)
+	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image, icon_hash) VALUES (?, ?, ?)", userID, image, iconHash)
+	if err != nil {
+		return 0, err
+	}
+
+	iconID, err := rs.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last inserted icon id: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit: %w", err)
+	}
+	return iconID, nil
 }
 
 func getMeHandler(c echo.Context) error {

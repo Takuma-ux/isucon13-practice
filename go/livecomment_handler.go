@@ -416,10 +416,9 @@ func moderateHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "failed to decode the request body as json")
 	}
 
-	const maxDeadlockRetries = 3
 	var wordID int64
 	var lastErr error
-	for attempt := 0; attempt < maxDeadlockRetries; attempt++ {
+	for attempt := 0; attempt < maxMySQLDeadlockRetries; attempt++ {
 		wordID, lastErr = moderateLivestream(ctx, userID, livestreamID, req.NGWord)
 		if lastErr == nil {
 			return c.JSON(http.StatusCreated, map[string]interface{}{

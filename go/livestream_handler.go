@@ -402,21 +402,37 @@ func exitLivestreamHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "livestream_id in path must be integer")
 	}
 
+	err = withMySQLDeadlockRetry(func() error {
+		return exitLivestream(ctx, userID, livestreamID)
+	})
+	if err != nil {
+		if isMySQLDeadlock(err) {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete livestream_view_history: "+err.Error())
+		}
+		if strings.Contains(err.Error(), "begin transaction") {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete livestream_view_history: "+err.Error())
+	}
+
+	return c.NoContent(http.StatusOK)
+}
+
+func exitLivestream(ctx context.Context, userID int64, livestreamID int) error {
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
+		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM livestream_viewers_history WHERE user_id = ? AND livestream_id = ?", userID, livestreamID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete livestream_view_history: "+err.Error())
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+		return fmt.Errorf("failed to commit: %w", err)
 	}
-
-	return c.NoContent(http.StatusOK)
+	return nil
 }
 
 func getLivestreamHandler(c echo.Context) error {
