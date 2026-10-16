@@ -518,6 +518,17 @@ func fillLivestreamsResponse(ctx context.Context, tx *sqlx.Tx, livestreamModels 
 	if err != nil {
 		return nil, err
 	}
+	return fillLivestreamsResponseWithOwners(ctx, tx, livestreamModels, livestreamIDs, owners)
+}
+
+// fillLivestreamsResponseWithOwners は owner 用 User を既に取っているときの fillLivestreamsResponse 本体。
+// owners は配信 owner の user ID をキーに含むこと。fillUsersByIDs は呼ばない。
+func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestreamModels []*LivestreamModel, livestreamIDs []int64, owners map[int64]User) ([]Livestream, error) {
+	livestreams := make([]Livestream, len(livestreamModels))
+	if len(livestreamModels) == 0 {
+		return livestreams, nil
+	}
+
 	// 旧関数が配信ごとに出していた livestream_tags と tags の SELECT をまとめて取る。
 	tagsByLivestream, err := tagsByLivestreamID(ctx, tx, livestreamIDs)
 	if err != nil {

@@ -104,7 +104,7 @@ func getLivecommentsHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livecomments: "+err.Error())
 	}
 
-	livecomments, err := fillLivecommentsResponse(ctx, tx, livecommentModels)
+	livecomments, err := fillLivecommentsForLivestream(ctx, tx, livecommentModels, int64(livestreamID))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fil livecomments: "+err.Error())
 	}
@@ -390,6 +390,58 @@ func moderateHandler(c echo.Context) error {
 	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"word_id": wordID,
 	})
+}
+
+// fillLivecommentsForLivestream は GET /api/livestream/:livestream_id/livecomment 用。
+// パスの livestream を1回取り、投稿者と配信者の user ID をまとめて fillUsersByIDs し、
+// livestreamsByIDs 経由の2回目の owner 用 users/themes/icons SELECT を避ける。
+func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecommentModels []LivecommentModel, livestreamID int64) ([]Livecomment, error) {
+	if len(livecommentModels) == 0 {
+		return []Livecomment{}, nil
+	}
+
+	var livestreamModel LivestreamModel
+	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
+		return nil, err
+	}
+
+	userIDs := make([]int64, 0, len(livecommentModels)+1)
+	for _, m := range livecommentModels {
+		userIDs = append(userIDs, m.UserID)
+	}
+	userIDs = append(userIDs, livestreamModel.UserID)
+	userIDs = uniqueInt64(userIDs)
+
+	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamID}, usersByID)
+	if err != nil {
+		return nil, err
+	}
+	if len(livestreams) != 1 {
+		return nil, sql.ErrNoRows
+	}
+	livestream := livestreams[0]
+
+	livecomments := make([]Livecomment, len(livecommentModels))
+	for i, m := range livecommentModels {
+		user, ok := usersByID[m.UserID]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		livecomments[i] = Livecomment{
+			ID:         m.ID,
+			User:       user,
+			Livestream: livestream,
+			Comment:    m.Comment,
+			Tip:        m.Tip,
+			CreatedAt:  m.CreatedAt,
+		}
+	}
+	return livecomments, nil
 }
 
 // fillLivecommentsResponse は、コメント一覧の投稿者 User と配信 Livestream を IN でまとめて埋める。
