@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -129,6 +130,14 @@ func main() {
 	e.Use(middleware.Recover())
 	if os.Getenv("ISUCON13_ACCESS_LOG") == "1" {
 		e.Use(middleware.Logger())
+	}
+	if os.Getenv("ISUCON13_GZIP") == "1" {
+		e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
+			Skipper: func(c echo.Context) bool {
+				// JPEG is already compressed; skipping saves CPU on a hot asset path.
+				return strings.HasPrefix(c.Path(), "/api/user/") && strings.HasSuffix(c.Path(), "/icon")
+			},
+		}))
 	}
 	cookieStore := sessions.NewCookieStore(secret)
 	cookieStore.Options.Domain = "*.u.isucon.local"
