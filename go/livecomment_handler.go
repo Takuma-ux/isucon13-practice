@@ -293,7 +293,7 @@ func reportLivecommentHandler(c echo.Context) error {
 	}
 	reportModel.ID = reportID
 
-	report, err := fillLivecommentReportResponse(ctx, tx, reportModel)
+	report, err := fillLivecommentReportResponseWithLivestream(ctx, tx, reportModel, livecommentModel, livestreamModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())
 	}
@@ -634,30 +634,27 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	return reports, nil
 }
 
-func fillLivecommentReportResponse(ctx context.Context, tx *sqlx.Tx, reportModel LivecommentReportModel) (LivecommentReport, error) {
-	reporterModel := UserModel{}
-	if err := tx.GetContext(ctx, &reporterModel, "SELECT * FROM users WHERE id = ?", reportModel.UserID); err != nil {
-		return LivecommentReport{}, err
-	}
-	reporter, err := fillUserResponse(ctx, tx, reporterModel)
+// fillLivecommentReportResponseWithLivestream は POST 通報用。ハンドラが既に取得した
+// livestream / livecomment 行を fillLivecommentResponseWithLivestream に渡し、再 SELECT を避ける。
+func fillLivecommentReportResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, reportModel LivecommentReportModel, livecommentModel LivecommentModel, livestreamModel LivestreamModel) (LivecommentReport, error) {
+	livecomment, err := fillLivecommentResponseWithLivestream(ctx, tx, livecommentModel, livestreamModel)
 	if err != nil {
 		return LivecommentReport{}, err
 	}
 
-	livecommentModel := LivecommentModel{}
-	if err := tx.GetContext(ctx, &livecommentModel, "SELECT * FROM livecomments WHERE id = ?", reportModel.LivecommentID); err != nil {
-		return LivecommentReport{}, err
-	}
-	livecomment, err := fillLivecommentResponse(ctx, tx, livecommentModel)
+	usersByID, err := fillUsersByIDs(ctx, tx, []int64{reportModel.UserID})
 	if err != nil {
 		return LivecommentReport{}, err
 	}
+	reporter, ok := usersByID[reportModel.UserID]
+	if !ok {
+		return LivecommentReport{}, sql.ErrNoRows
+	}
 
-	report := LivecommentReport{
+	return LivecommentReport{
 		ID:          reportModel.ID,
 		Reporter:    reporter,
 		Livecomment: livecomment,
 		CreatedAt:   reportModel.CreatedAt,
-	}
-	return report, nil
+	}, nil
 }

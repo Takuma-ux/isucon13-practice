@@ -104,15 +104,6 @@ func getUserStatisticsHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	var user UserModel
-	if err := tx.GetContext(ctx, &user, "SELECT * FROM users WHERE name = ?", username); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusBadRequest, "not found user that has the given username")
-		} else {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
-		}
-	}
-
 	// ランク算出: 全ユーザーのスコア(reaction数 + tip合計)を1クエリで取得
 	var scores []userScoreRow
 	scoreQuery := `
@@ -139,14 +130,21 @@ func getUserStatisticsHandler(c echo.Context) error {
 
 	var ranking UserRanking
 	var totalReactions int64
+	var userID int64
+	var userFound bool
 	for _, s := range scores {
 		ranking = append(ranking, UserRankingEntry{
 			Username: s.Name,
 			Score:    s.ReactionsCount + s.TotalTips,
 		})
 		if s.Name == username {
+			userID = s.ID
+			userFound = true
 			totalReactions = s.ReactionsCount
 		}
+	}
+	if !userFound {
+		return echo.NewHTTPError(http.StatusBadRequest, "not found user that has the given username")
 	}
 	sort.Sort(ranking)
 
@@ -167,7 +165,7 @@ func getUserStatisticsHandler(c echo.Context) error {
 	  (SELECT IFNULL(SUM(lc.tip), 0) FROM livecomments lc INNER JOIN livestreams l ON l.id = lc.livestream_id WHERE l.user_id = ?) AS total_tip,
 	  (SELECT COUNT(*) FROM livestream_viewers_history h INNER JOIN livestreams l ON l.id = h.livestream_id WHERE l.user_id = ?) AS viewers_count
 	`
-	if err := tx.GetContext(ctx, &statsRow, statsQuery, user.ID, user.ID, user.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := tx.GetContext(ctx, &statsRow, statsQuery, userID, userID, userID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user stats: "+err.Error())
 	}
 
@@ -218,15 +216,6 @@ func getLivestreamStatisticsHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	var livestream LivestreamModel
-	if err := tx.GetContext(ctx, &livestream, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusBadRequest, "cannot get stats of not found livestream")
-		} else {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
-		}
-	}
-
 	// ランク算出: 全ライブ配信のスコア(reaction数 + tip合計)を1クエリで取得
 	var scores []livestreamScoreRow
 	scoreQuery := `
@@ -246,11 +235,18 @@ func getLivestreamStatisticsHandler(c echo.Context) error {
 	}
 
 	var ranking LivestreamRanking
+	var livestreamFound bool
 	for _, s := range scores {
 		ranking = append(ranking, LivestreamRankingEntry{
 			LivestreamID: s.ID,
 			Score:        s.ReactionsCount + s.TotalTips,
 		})
+		if s.ID == livestreamID {
+			livestreamFound = true
+		}
+	}
+	if !livestreamFound {
+		return echo.NewHTTPError(http.StatusBadRequest, "cannot get stats of not found livestream")
 	}
 	sort.Sort(ranking)
 
