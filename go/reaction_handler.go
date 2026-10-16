@@ -68,7 +68,7 @@ func getReactionsHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "failed to get reactions")
 	}
 
-	reactions, err := fillReactionsResponse(ctx, tx, reactionModels)
+	reactions, err := fillReactionsForLivestream(ctx, tx, reactionModels, int64(livestreamID))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
 	}
@@ -139,6 +139,57 @@ func postReactionHandler(c echo.Context) error {
 	return c.JSON(http.StatusCreated, reaction)
 }
 
+// fillReactionsForLivestream は GET /api/livestream/:livestream_id/reaction 用。
+// パスの livestream を1回取り、リアクション投稿者と配信者の user ID をまとめて fillUsersByIDs し、
+// livestreamsByIDs 経由の2回目の owner 用 users/themes/icons SELECT を避ける。
+func fillReactionsForLivestream(ctx context.Context, tx *sqlx.Tx, reactionModels []ReactionModel, livestreamID int64) ([]Reaction, error) {
+	if len(reactionModels) == 0 {
+		return []Reaction{}, nil
+	}
+
+	var livestreamModel LivestreamModel
+	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
+		return nil, err
+	}
+
+	userIDs := make([]int64, 0, len(reactionModels)+1)
+	for _, m := range reactionModels {
+		userIDs = append(userIDs, m.UserID)
+	}
+	userIDs = append(userIDs, livestreamModel.UserID)
+	userIDs = uniqueInt64(userIDs)
+
+	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamID}, usersByID)
+	if err != nil {
+		return nil, err
+	}
+	if len(livestreams) != 1 {
+		return nil, sql.ErrNoRows
+	}
+	livestream := livestreams[0]
+
+	reactions := make([]Reaction, len(reactionModels))
+	for i, m := range reactionModels {
+		user, ok := usersByID[m.UserID]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		reactions[i] = Reaction{
+			ID:         m.ID,
+			EmojiName:  m.EmojiName,
+			User:       user,
+			Livestream: livestream,
+			CreatedAt:  m.CreatedAt,
+		}
+	}
+	return reactions, nil
+}
+
 // fillReactionsResponse は、リアクション一覧の User と配信 Livestream を IN でまとめて埋める。
 func fillReactionsResponse(ctx context.Context, tx *sqlx.Tx, reactionModels []ReactionModel) ([]Reaction, error) {
 	if len(reactionModels) == 0 {
@@ -185,7 +236,7 @@ func fillReactionsResponse(ctx context.Context, tx *sqlx.Tx, reactionModels []Re
 }
 
 func fillReactionResponse(ctx context.Context, tx *sqlx.Tx, reactionModel ReactionModel) (Reaction, error) {
-	reactions, err := fillReactionsResponse(ctx, tx, []ReactionModel{reactionModel})
+	reactions, err := fillReactionsForLivestream(ctx, tx, []ReactionModel{reactionModel}, reactionModel.LivestreamID)
 	if err != nil {
 		return Reaction{}, err
 	}
