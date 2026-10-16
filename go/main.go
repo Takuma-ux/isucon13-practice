@@ -125,7 +125,10 @@ func main() {
 	e := echo.New()
 	e.Debug = false
 	e.Logger.SetLevel(echolog.INFO)
-	e.Use(middleware.Logger())
+	e.JSONSerializer = GoJSONSerializer{}
+	if os.Getenv("ISUCON13_ACCESS_LOG") == "1" {
+		e.Use(middleware.Logger())
+	}
 	cookieStore := sessions.NewCookieStore(secret)
 	cookieStore.Options.Domain = "*.u.isucon.local"
 	e.Use(session.Middleware(cookieStore))
