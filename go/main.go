@@ -101,6 +101,9 @@ func connectDB(logger echo.Logger) (*sqlx.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(50)
+	// Default MaxIdleConns is 2; with MaxOpenConns 50 that causes idle connections to be
+	// closed and re-opened under concurrent load. Keep idle pool aligned with max open.
+	db.SetMaxIdleConns(50)
 
 	if err := db.Ping(); err != nil {
 		return nil, err
