@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -30,8 +31,20 @@ const (
 
 var fallbackImage = "../img/NoImage.jpg"
 
+// fallbackImageBytes is NoImage.jpg loaded once at startup (see loadFallbackImage).
+var fallbackImageBytes []byte
+
 // SHA-256 (lowercase hex) of ../img/NoImage.jpg; matches ISUCON13 official commentary.
 const defaultIconHash = "d9f8294e9d895f81ce62e73dc7d5dff862a4fa40bd4e0fecf53f7526a8edcac0"
+
+func loadFallbackImage() error {
+	b, err := os.ReadFile(fallbackImage)
+	if err != nil {
+		return fmt.Errorf("read fallback icon %s: %w", fallbackImage, err)
+	}
+	fallbackImageBytes = b
+	return nil
+}
 
 func hashIconBytes(image []byte) string {
 	return fmt.Sprintf("%x", sha256.Sum256(image))
@@ -263,7 +276,7 @@ func getIconHandler(c echo.Context) error {
 	var image []byte
 	if err := tx.GetContext(ctx, &image, "SELECT image FROM icons WHERE user_id = ?", user.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return c.File(fallbackImage)
+			return c.Blob(http.StatusOK, "image/jpeg", fallbackImageBytes)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 	}

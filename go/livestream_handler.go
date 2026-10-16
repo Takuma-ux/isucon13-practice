@@ -153,17 +153,26 @@ func reserveLivestreamHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livestream tag: "+err.Error())
 	}
 
-	livestreams, err := fillLivestreamsResponse(ctx, tx, []*LivestreamModel{livestreamModel})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
-	}
-	livestream := livestreams[0]
-
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
 
-	return c.JSON(http.StatusCreated, livestream)
+	// Response fill is read-only; run after commit so reservation row locks are not held during owner/tag SELECTs.
+	readTx, err := dbConn.BeginTxx(ctx, nil)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
+	}
+	defer readTx.Rollback()
+
+	livestreams, err := fillLivestreamsResponse(ctx, readTx, []*LivestreamModel{livestreamModel})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
+	}
+	if err := readTx.Commit(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+	}
+
+	return c.JSON(http.StatusCreated, livestreams[0])
 }
 
 // insertLivestreamTags inserts all tag associations in one statement inside tx.

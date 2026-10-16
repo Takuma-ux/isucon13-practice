@@ -215,6 +215,11 @@ func main() {
 	}
 	powerDNSSubdomainAddress = subdomainAddr
 
+	if err := loadFallbackImage(); err != nil {
+		e.Logger.Errorf("%v", err)
+		os.Exit(1)
+	}
+
 	// HTTPサーバ起動
 	listenAddr := net.JoinHostPort("", strconv.Itoa(listenPort))
 	go func() {
