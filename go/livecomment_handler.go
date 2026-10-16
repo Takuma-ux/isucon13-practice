@@ -500,18 +500,19 @@ func fillLivecommentResponse(ctx context.Context, tx *sqlx.Tx, livecommentModel 
 }
 
 // fillLivecommentResponseWithLivestream は POST コメント用。ハンドラが既に取得した livestream 行を
-// fillLivestreamsResponse に渡し、livestreamsByIDs による livestreams の再 SELECT を避ける。
+// fillLivestreamsResponseWithOwners に渡し、livestreams の再 SELECT と owner 用の2回目 fillUsersByIDs を避ける。
 func fillLivecommentResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, livecommentModel LivecommentModel, livestreamModel LivestreamModel) (Livecomment, error) {
 	if livecommentModel.LivestreamID != livestreamModel.ID {
 		return Livecomment{}, fmt.Errorf("livestream not found: %d", livecommentModel.LivestreamID)
 	}
 
-	usersByID, err := fillUsersByIDs(ctx, tx, []int64{livecommentModel.UserID})
+	userIDs := uniqueInt64([]int64{livecommentModel.UserID, livestreamModel.UserID})
+	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
 	if err != nil {
 		return Livecomment{}, err
 	}
 
-	livestreams, err := fillLivestreamsResponse(ctx, tx, []*LivestreamModel{&livestreamModel})
+	livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamModel.ID}, usersByID)
 	if err != nil {
 		return Livecomment{}, err
 	}
