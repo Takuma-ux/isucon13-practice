@@ -304,6 +304,93 @@ func reportLivecommentHandler(c echo.Context) error {
 	return c.JSON(http.StatusCreated, report)
 }
 
+const spamLivecommentDeleteBatchSize = 500
+
+// deleteLivecommentsHittingNgWords は moderate 用。当該配信の全 NG ワードにマッチするコメントを削除する。
+// 単一の広い DELETE より、id 順にバッチで FOR UPDATE → PK 削除し、ロック順序と保持時間を抑える。
+func deleteLivecommentsHittingNgWords(ctx context.Context, tx *sqlx.Tx, livestreamID int) error {
+	const selectIDs = `
+		SELECT lc.id FROM livecomments lc
+		WHERE lc.livestream_id = ?
+		AND EXISTS (
+			SELECT 1 FROM ng_words nw
+			WHERE nw.livestream_id = ?
+			AND lc.comment LIKE CONCAT('%', nw.word, '%')
+		)
+		ORDER BY lc.id
+		LIMIT ?
+		FOR UPDATE`
+
+	for {
+		var ids []int64
+		if err := tx.SelectContext(ctx, &ids, selectIDs, livestreamID, livestreamID, spamLivecommentDeleteBatchSize); err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+
+		query, args, err := sqlx.In("DELETE FROM livecomments WHERE id IN (?)", ids)
+		if err != nil {
+			return err
+		}
+		query = tx.Rebind(query)
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+}
+
+func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngWord string) (wordID int64, err error) {
+	tx, err := dbConn.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", errModerateBegin, err)
+	}
+	defer tx.Rollback()
+
+	var ownedLivestreams []LivestreamModel
+	if err := tx.SelectContext(ctx, &ownedLivestreams, "SELECT * FROM livestreams WHERE id = ? AND user_id = ?", livestreamID, userID); err != nil {
+		return 0, fmt.Errorf("%w: %w", errModerateGetLivestreams, err)
+	}
+	if len(ownedLivestreams) == 0 {
+		return 0, errModerateNotOwner
+	}
+
+	rs, err := tx.NamedExecContext(ctx, "INSERT INTO ng_words(user_id, livestream_id, word, created_at) VALUES (:user_id, :livestream_id, :word, :created_at)", &NGWord{
+		UserID:       userID,
+		LivestreamID: int64(livestreamID),
+		Word:         ngWord,
+		CreatedAt:    time.Now().Unix(),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", errModerateInsertNGWord, err)
+	}
+
+	wordID, err = rs.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", errModerateLastInsertID, err)
+	}
+
+	if err := deleteLivecommentsHittingNgWords(ctx, tx, livestreamID); err != nil {
+		return 0, fmt.Errorf("%w: %w", errModerateDeleteSpam, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("%w: %w", errModerateCommit, err)
+	}
+	return wordID, nil
+}
+
+var (
+	errModerateNotOwner      = errors.New("moderate: not stream owner")
+	errModerateBegin         = errors.New("moderate: begin")
+	errModerateGetLivestreams = errors.New("moderate: get livestreams")
+	errModerateInsertNGWord  = errors.New("moderate: insert ng word")
+	errModerateLastInsertID  = errors.New("moderate: last insert id")
+	errModerateDeleteSpam    = errors.New("moderate: delete spam")
+	errModerateCommit        = errors.New("moderate: commit")
+)
+
 // NGワードを登録
 func moderateHandler(c echo.Context) error {
 	ctx := c.Request().Context()
@@ -329,57 +416,44 @@ func moderateHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "failed to decode the request body as json")
 	}
 
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
+	const maxDeadlockRetries = 3
+	var wordID int64
+	var lastErr error
+	for attempt := 0; attempt < maxDeadlockRetries; attempt++ {
+		wordID, lastErr = moderateLivestream(ctx, userID, livestreamID, req.NGWord)
+		if lastErr == nil {
+			return c.JSON(http.StatusCreated, map[string]interface{}{
+				"word_id": wordID,
+			})
+		}
+		if errors.Is(lastErr, errModerateNotOwner) {
+			return echo.NewHTTPError(http.StatusBadRequest, "A streamer can't moderate livestreams that other streamers own")
+		}
+		if isMySQLDeadlock(lastErr) {
+			continue
+		}
+		return moderateHandlerError(lastErr)
+	}
+	return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old livecomments that hit spams: "+lastErr.Error())
+}
+
+func moderateHandlerError(err error) *echo.HTTPError {
+	switch {
+	case errors.Is(err, errModerateBegin):
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
-	}
-	defer tx.Rollback()
-
-	// 配信者自身の配信に対するmoderateなのかを検証
-	var ownedLivestreams []LivestreamModel
-	if err := tx.SelectContext(ctx, &ownedLivestreams, "SELECT * FROM livestreams WHERE id = ? AND user_id = ?", livestreamID, userID); err != nil {
+	case errors.Is(err, errModerateGetLivestreams):
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
-	}
-	if len(ownedLivestreams) == 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "A streamer can't moderate livestreams that other streamers own")
-	}
-
-	rs, err := tx.NamedExecContext(ctx, "INSERT INTO ng_words(user_id, livestream_id, word, created_at) VALUES (:user_id, :livestream_id, :word, :created_at)", &NGWord{
-		UserID:       int64(userID),
-		LivestreamID: int64(livestreamID),
-		Word:         req.NGWord,
-		CreatedAt:    time.Now().Unix(),
-	})
-	if err != nil {
+	case errors.Is(err, errModerateInsertNGWord):
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new NG word: "+err.Error())
-	}
-
-	wordID, err := rs.LastInsertId()
-	if err != nil {
+	case errors.Is(err, errModerateLastInsertID):
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted NG word id: "+err.Error())
-	}
-
-	// NGワードにヒットする過去の投稿も全削除する（当該配信の全 NG ワードを 1 回の DELETE）
-	deleteQuery := `
-	DELETE lc FROM livecomments lc
-	WHERE lc.livestream_id = ?
-	AND EXISTS (
-		SELECT 1 FROM ng_words nw
-		WHERE nw.livestream_id = ?
-		AND lc.comment LIKE CONCAT('%', nw.word, '%')
-	)
-	`
-	if _, err := tx.ExecContext(ctx, deleteQuery, livestreamID, livestreamID); err != nil {
+	case errors.Is(err, errModerateDeleteSpam):
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old livecomments that hit spams: "+err.Error())
-	}
-
-	if err := tx.Commit(); err != nil {
+	case errors.Is(err, errModerateCommit):
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+	default:
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-
-	return c.JSON(http.StatusCreated, map[string]interface{}{
-		"word_id": wordID,
-	})
 }
 
 // fillLivecommentsForLivestream は GET /api/livestream/:livestream_id/livecomment 用。
