@@ -37,17 +37,8 @@ func invalidateTagsCache() {
 }
 
 func loadTagsFromDB(ctx context.Context) (*TagsResponse, error) {
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
 	var tagModels []*TagModel
-	if err := tx.SelectContext(ctx, &tagModels, "SELECT * FROM tags"); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
+	if err := dbConn.SelectContext(ctx, &tagModels, "SELECT * FROM tags"); err != nil {
 		return nil, err
 	}
 
