@@ -15,6 +15,7 @@ type GoJSONSerializer struct{}
 
 func (d GoJSONSerializer) Serialize(c echo.Context, i interface{}, indent string) error {
 	enc := gojson.NewEncoder(c.Response())
+	enc.SetEscapeHTML(false)
 	if indent != "" {
 		enc.SetIndent("", indent)
 	}

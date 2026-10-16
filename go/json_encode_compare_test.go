@@ -26,6 +26,7 @@ func echoEncodeStdlib(v interface{}) ([]byte, error) {
 func echoEncodeGoJSON(v interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gojson.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
@@ -198,4 +199,36 @@ func TestJSONEncodingSynthetic(t *testing.T) {
 	compareJSONEncodings(t, "synthetic_User", user)
 	compareJSONEncodings(t, "synthetic_Livecomment", lc)
 	compareJSONEncodings(t, "synthetic_[]Livecomment", []Livecomment{lc, lc})
+}
+
+func TestJSONEncodingHTMLSpecialCharsSemanticMatch(t *testing.T) {
+	v := map[string]string{
+		"text": "a<b>&c>\"d'",
+	}
+	std, err := echoEncodeStdlib(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goc, err := echoEncodeGoJSON(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdVal, gocVal map[string]string
+	if err := json.Unmarshal(std, &stdVal); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(goc, &gocVal); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stdVal, gocVal) {
+		t.Fatalf("semantic mismatch std=%v goc=%v", stdVal, gocVal)
+	}
+	if bytes.Equal(std, goc) {
+		t.Log("byte-identical (stdlib also escaped HTML in this encoder path)")
+	} else {
+		t.Logf("valid JSON both ways; bytes differ as expected (stdlib may escape <>&): std=%s goc=%s", trimNL(std), trimNL(goc))
+		if bytes.Contains(goc, []byte("\\u003c")) {
+			t.Fatal("go-json should not HTML-escape with SetEscapeHTML(false)")
+		}
+	}
 }

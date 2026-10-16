@@ -228,6 +228,13 @@ func searchLivestreamsHandler(c echo.Context) error {
 			if err != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, "failed to construct IN query: "+err.Error())
 			}
+			if c.QueryParam("limit") != "" {
+				limit, err := strconv.Atoi(c.QueryParam("limit"))
+				if err != nil {
+					return echo.NewHTTPError(http.StatusBadRequest, "limit query parameter must be integer")
+				}
+				query += fmt.Sprintf(" LIMIT %d", limit)
+			}
 			query = tx.Rebind(query)
 			if err := tx.SelectContext(ctx, &livestreamModels, query, params...); err != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
