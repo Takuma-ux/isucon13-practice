@@ -557,8 +557,9 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	if err := selectIn(ctx, tx, &livecommentRowModels, "SELECT * FROM livecomments WHERE id IN (?)", livecommentIDs); err != nil {
 		return nil, err
 	}
-	if len(livecommentRowModels) != len(livecommentIDs) {
-		return nil, sql.ErrNoRows
+	// moderate でコメントだけ削除され livecomment_reports が残ることがある。一覧は存在するコメントだけ返す。
+	if len(livecommentRowModels) == 0 {
+		return []LivecommentReport{}, nil
 	}
 
 	livestreamIDs := make([]int64, 0, len(livecommentRowModels))
@@ -623,22 +624,22 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 		}
 	}
 
-	reports := make([]LivecommentReport, len(reportModels))
-	for i, rm := range reportModels {
+	reports := make([]LivecommentReport, 0, len(reportModels))
+	for _, rm := range reportModels {
+		livecomment, ok := livecommentByID[rm.LivecommentID]
+		if !ok {
+			continue
+		}
 		reporter, ok := usersByID[rm.UserID]
 		if !ok {
 			return nil, sql.ErrNoRows
 		}
-		livecomment, ok := livecommentByID[rm.LivecommentID]
-		if !ok {
-			return nil, sql.ErrNoRows
-		}
-		reports[i] = LivecommentReport{
+		reports = append(reports, LivecommentReport{
 			ID:          rm.ID,
 			Reporter:    reporter,
 			Livecomment: livecomment,
 			CreatedAt:   rm.CreatedAt,
-		}
+		})
 	}
 	return reports, nil
 }
