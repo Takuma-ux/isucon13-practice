@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -112,7 +114,9 @@ func reserveLivestreamHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get reservation_slots: "+err.Error())
 	}
 	for _, slot := range slots {
-		c.Logger().Infof("%d ~ %d予約枠の残数 = %d\n", slot.StartAt, slot.EndAt, slot.Slot)
+		if os.Getenv("ISUCON13_ACCESS_LOG") == "1" {
+			c.Logger().Infof("%d ~ %d予約枠の残数 = %d\n", slot.StartAt, slot.EndAt, slot.Slot)
+		}
 		if slot.Slot < 1 {
 			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("予約期間 %d ~ %dに対して、予約区間 %d ~ %dが予約できません", termStartAt.Unix(), termEndAt.Unix(), req.StartAt, req.EndAt))
 		}
@@ -145,14 +149,8 @@ func reserveLivestreamHandler(c echo.Context) error {
 	}
 	livestreamModel.ID = livestreamID
 
-	// タグ追加
-	for _, tagID := range req.Tags {
-		if _, err := tx.NamedExecContext(ctx, "INSERT INTO livestream_tags (livestream_id, tag_id) VALUES (:livestream_id, :tag_id)", &LivestreamTagModel{
-			LivestreamID: livestreamID,
-			TagID:        tagID,
-		}); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livestream tag: "+err.Error())
-		}
+	if err := insertLivestreamTags(ctx, tx, livestreamID, req.Tags); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livestream tag: "+err.Error())
 	}
 
 	livestreams, err := fillLivestreamsResponse(ctx, tx, []*LivestreamModel{livestreamModel})
@@ -166,6 +164,22 @@ func reserveLivestreamHandler(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusCreated, livestream)
+}
+
+// insertLivestreamTags inserts all tag associations in one statement inside tx.
+func insertLivestreamTags(ctx context.Context, tx *sqlx.Tx, livestreamID int64, tagIDs []int64) error {
+	if len(tagIDs) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(tagIDs))
+	args := make([]interface{}, 0, len(tagIDs)*2)
+	for i, tagID := range tagIDs {
+		placeholders[i] = "(?, ?)"
+		args = append(args, livestreamID, tagID)
+	}
+	query := "INSERT INTO livestream_tags (livestream_id, tag_id) VALUES " + strings.Join(placeholders, ",")
+	_, err := tx.ExecContext(ctx, query, args...)
+	return err
 }
 
 func searchLivestreamsHandler(c echo.Context) error {

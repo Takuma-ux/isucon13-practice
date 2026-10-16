@@ -126,13 +126,13 @@ func main() {
 	e.Debug = false
 	e.Logger.SetLevel(echolog.INFO)
 	e.JSONSerializer = GoJSONSerializer{}
+	e.Use(middleware.Recover())
 	if os.Getenv("ISUCON13_ACCESS_LOG") == "1" {
 		e.Use(middleware.Logger())
 	}
 	cookieStore := sessions.NewCookieStore(secret)
 	cookieStore.Options.Domain = "*.u.isucon.local"
 	e.Use(session.Middleware(cookieStore))
-	// e.Use(middleware.Recover())
 
 	// 初期化
 	e.POST("/api/initialize", initializeHandler)
