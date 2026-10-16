@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
+	"sync"
 
 	"github.com/labstack/echo/v4"
 )
@@ -22,23 +24,31 @@ type TagsResponse struct {
 	Tags []*Tag `json:"tags"`
 }
 
-func getTagHandler(c echo.Context) error {
-	ctx := c.Request().Context()
-	ctx = withResponseCache(ctx)
+var (
+	tagsCacheMu sync.RWMutex
+	tagsCache   *TagsResponse
+)
 
+// invalidateTagsCache clears the in-memory tag list (e.g. after POST /api/initialize).
+func invalidateTagsCache() {
+	tagsCacheMu.Lock()
+	tagsCache = nil
+	tagsCacheMu.Unlock()
+}
+
+func loadTagsFromDB(ctx context.Context) (*TagsResponse, error) {
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin new transaction: : "+err.Error()+err.Error())
+		return nil, err
 	}
 	defer tx.Rollback()
 
 	var tagModels []*TagModel
 	if err := tx.SelectContext(ctx, &tagModels, "SELECT * FROM tags"); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get tags: "+err.Error())
+		return nil, err
 	}
-
 	if err := tx.Commit(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+		return nil, err
 	}
 
 	tags := make([]*Tag, len(tagModels))
@@ -48,9 +58,40 @@ func getTagHandler(c echo.Context) error {
 			Name: tagModels[i].Name,
 		}
 	}
-	return c.JSON(http.StatusOK, &TagsResponse{
-		Tags: tags,
-	})
+	return &TagsResponse{Tags: tags}, nil
+}
+
+func getCachedTags(ctx context.Context) (*TagsResponse, error) {
+	tagsCacheMu.RLock()
+	if tagsCache != nil {
+		cached := tagsCache
+		tagsCacheMu.RUnlock()
+		return cached, nil
+	}
+	tagsCacheMu.RUnlock()
+
+	tagsCacheMu.Lock()
+	defer tagsCacheMu.Unlock()
+	if tagsCache != nil {
+		return tagsCache, nil
+	}
+	loaded, err := loadTagsFromDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tagsCache = loaded
+	return tagsCache, nil
+}
+
+func getTagHandler(c echo.Context) error {
+	ctx := c.Request().Context()
+	ctx = withResponseCache(ctx)
+
+	tagsResponse, err := getCachedTags(ctx)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get tags: "+err.Error())
+	}
+	return c.JSON(http.StatusOK, tagsResponse)
 }
 
 // 配信者のテーマ取得API
