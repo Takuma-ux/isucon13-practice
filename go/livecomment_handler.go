@@ -371,14 +371,43 @@ func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngW
 		return 0, fmt.Errorf("%w: %w", errModerateLastInsertID, err)
 	}
 
-	if err := deleteLivecommentsHittingNgWords(ctx, tx, livestreamID); err != nil {
-		return 0, fmt.Errorf("%w: %w", errModerateDeleteSpam, err)
-	}
-
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("%w: %w", errModerateCommit, err)
 	}
+
+	// NG ワード登録だけ先に見えるようにし、スパム削除は別トランザクションで行う。
+	// viewer-report が moderate による DELETE と競合して 404 になる窓を狭める。
+	scheduleDeleteLivecommentsHittingNgWords(livestreamID)
 	return wordID, nil
+}
+
+func scheduleDeleteLivecommentsHittingNgWords(livestreamID int) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		for attempt := 0; attempt < maxMySQLDeadlockRetries; attempt++ {
+			tx, err := dbConn.BeginTxx(ctx, nil)
+			if err != nil {
+				return
+			}
+			err = deleteLivecommentsHittingNgWords(ctx, tx, livestreamID)
+			if err != nil {
+				tx.Rollback()
+				if isMySQLDeadlock(err) {
+					continue
+				}
+				return
+			}
+			if err := tx.Commit(); err != nil {
+				tx.Rollback()
+				if isMySQLDeadlock(err) {
+					continue
+				}
+				return
+			}
+			return
+		}
+	}()
 }
 
 var (
@@ -463,31 +492,47 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 		return []Livecomment{}, nil
 	}
 
-	var livestreamModel LivestreamModel
-	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
-		return nil, err
+	var livestream Livestream
+	if cached, ok := getLivestreamFromCache(ctx, livestreamID); ok {
+		livestream = *cached
+	} else {
+		var livestreamModel LivestreamModel
+		if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
+			return nil, err
+		}
+
+		userIDs := make([]int64, 0, len(livecommentModels)+1)
+		for _, m := range livecommentModels {
+			userIDs = append(userIDs, m.UserID)
+		}
+		userIDs = append(userIDs, livestreamModel.UserID)
+		userIDs = uniqueInt64(userIDs)
+
+		usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+		if err != nil {
+			return nil, err
+		}
+
+		livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamID}, usersByID)
+		if err != nil {
+			return nil, err
+		}
+		if len(livestreams) != 1 {
+			return nil, sql.ErrNoRows
+		}
+		livestream = livestreams[0]
 	}
 
-	userIDs := make([]int64, 0, len(livecommentModels)+1)
+	userIDs := make([]int64, 0, len(livecommentModels))
 	for _, m := range livecommentModels {
 		userIDs = append(userIDs, m.UserID)
 	}
-	userIDs = append(userIDs, livestreamModel.UserID)
 	userIDs = uniqueInt64(userIDs)
 
 	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
 	if err != nil {
 		return nil, err
 	}
-
-	livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamID}, usersByID)
-	if err != nil {
-		return nil, err
-	}
-	if len(livestreams) != 1 {
-		return nil, sql.ErrNoRows
-	}
-	livestream := livestreams[0]
 
 	livecomments := make([]Livecomment, len(livecommentModels))
 	for i, m := range livecommentModels {

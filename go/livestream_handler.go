@@ -574,14 +574,31 @@ func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestr
 		return livestreams, nil
 	}
 
+	uncachedModels := make([]*LivestreamModel, 0, len(livestreamModels))
+	uncachedIDs := make([]int64, 0, len(livestreamModels))
+	uncachedIdx := make([]int, 0, len(livestreamModels))
+	for i, livestreamModel := range livestreamModels {
+		if cached, ok := getLivestreamFromCache(ctx, livestreamModel.ID); ok {
+			livestreams[i] = *cached
+			continue
+		}
+		uncachedModels = append(uncachedModels, livestreamModel)
+		uncachedIDs = append(uncachedIDs, livestreamModel.ID)
+		uncachedIdx = append(uncachedIdx, i)
+	}
+	if len(uncachedModels) == 0 {
+		return livestreams, nil
+	}
+
 	// 旧関数が配信ごとに出していた livestream_tags と tags の SELECT をまとめて取る。
-	tagsByLivestream, err := tagsByLivestreamID(ctx, tx, livestreamIDs)
+	tagsByLivestream, err := tagsByLivestreamID(ctx, tx, uncachedIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	// 旧関数の最後と同じ構造体を、引数の順に作る。このループでは SQL を出さない。
-	for i, livestreamModel := range livestreamModels {
+	for j, livestreamModel := range uncachedModels {
+		i := uncachedIdx[j]
 		owner, ok := owners[livestreamModel.UserID]
 		if !ok {
 			return nil, fmt.Errorf("user not found: %d", livestreamModel.UserID)
