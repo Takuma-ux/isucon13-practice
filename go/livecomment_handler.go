@@ -371,43 +371,14 @@ func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngW
 		return 0, fmt.Errorf("%w: %w", errModerateLastInsertID, err)
 	}
 
+	if err := deleteLivecommentsHittingNgWords(ctx, tx, livestreamID); err != nil {
+		return 0, fmt.Errorf("%w: %w", errModerateDeleteSpam, err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("%w: %w", errModerateCommit, err)
 	}
-
-	// NG ワード登録だけ先に見えるようにし、スパム削除は別トランザクションで行う。
-	// viewer-report が moderate による DELETE と競合して 404 になる窓を狭める。
-	scheduleDeleteLivecommentsHittingNgWords(livestreamID)
 	return wordID, nil
-}
-
-func scheduleDeleteLivecommentsHittingNgWords(livestreamID int) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		for attempt := 0; attempt < maxMySQLDeadlockRetries; attempt++ {
-			tx, err := dbConn.BeginTxx(ctx, nil)
-			if err != nil {
-				return
-			}
-			err = deleteLivecommentsHittingNgWords(ctx, tx, livestreamID)
-			if err != nil {
-				tx.Rollback()
-				if isMySQLDeadlock(err) {
-					continue
-				}
-				return
-			}
-			if err := tx.Commit(); err != nil {
-				tx.Rollback()
-				if isMySQLDeadlock(err) {
-					continue
-				}
-				return
-			}
-			return
-		}
-	}()
 }
 
 var (
