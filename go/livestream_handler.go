@@ -664,9 +664,9 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 	}
 
 	// 旧: 配信ごとに SELECT * FROM users WHERE id = ?
-	// 今: 集めた user ID を IN に渡し、owner 行を1回で取る。
-	var userModels []UserModel
-	if err := selectIn(ctx, tx, &userModels, "SELECT * FROM users WHERE id IN (?)", missIDs); err != nil {
+	// 今: 集めた user ID を IN に渡し、owner 行を1回で取る（password は JSON に出さないので読まない）。
+	var userModels []userFillModel
+	if err := selectIn(ctx, tx, &userModels, "SELECT id, name, display_name, description FROM users WHERE id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
 	// 旧 GetContext は行が無いと sql.ErrNoRows。IN は欠落をエラーにしないので、件数で同じ失敗にする。
@@ -675,12 +675,12 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 	}
 
 	// 旧 fillUserResponse の SELECT * FROM themes WHERE user_id = ? を、user ID の IN 1回にする。
-	var themeModels []ThemeModel
-	if err := selectIn(ctx, tx, &themeModels, "SELECT * FROM themes WHERE user_id IN (?)", missIDs); err != nil {
+	var themeModels []themeFillModel
+	if err := selectIn(ctx, tx, &themeModels, "SELECT id, user_id, dark_mode FROM themes WHERE user_id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
 	// 後のループが user ID で引けるようにする。SQL は出さない。
-	themeByUserID := make(map[int64]ThemeModel, len(themeModels))
+	themeByUserID := make(map[int64]themeFillModel, len(themeModels))
 	for _, themeModel := range themeModels {
 		themeByUserID[themeModel.UserID] = themeModel
 	}
@@ -783,6 +783,20 @@ func tagsByLivestreamID(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64)
 		})
 	}
 	return tags, nil
+}
+
+// userFillModel は fillUsersByIDs 用の users 行（password 列を読まない）。
+type userFillModel struct {
+	ID          int64  `db:"id"`
+	Name        string `db:"name"`
+	DisplayName string `db:"display_name"`
+	Description string `db:"description"`
+}
+
+type themeFillModel struct {
+	ID       int64 `db:"id"`
+	UserID   int64 `db:"user_id"`
+	DarkMode bool  `db:"dark_mode"`
 }
 
 // iconHashModel は icons から user_id と icon_hash だけを受ける。SELECT user_id, icon_hash のスキャン先。
