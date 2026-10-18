@@ -651,20 +651,32 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 		return users, nil
 	}
 
+	missIDs := make([]int64, 0, len(userIDs))
+	for _, id := range userIDs {
+		if cached, ok := getUserFromCache(ctx, id); ok {
+			users[id] = *cached
+			continue
+		}
+		missIDs = append(missIDs, id)
+	}
+	if len(missIDs) == 0 {
+		return users, nil
+	}
+
 	// 旧: 配信ごとに SELECT * FROM users WHERE id = ?
 	// 今: 集めた user ID を IN に渡し、owner 行を1回で取る。
 	var userModels []UserModel
-	if err := selectIn(ctx, tx, &userModels, "SELECT * FROM users WHERE id IN (?)", userIDs); err != nil {
+	if err := selectIn(ctx, tx, &userModels, "SELECT * FROM users WHERE id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
 	// 旧 GetContext は行が無いと sql.ErrNoRows。IN は欠落をエラーにしないので、件数で同じ失敗にする。
-	if len(userModels) != len(userIDs) {
+	if len(userModels) != len(missIDs) {
 		return nil, sql.ErrNoRows
 	}
 
 	// 旧 fillUserResponse の SELECT * FROM themes WHERE user_id = ? を、user ID の IN 1回にする。
 	var themeModels []ThemeModel
-	if err := selectIn(ctx, tx, &themeModels, "SELECT * FROM themes WHERE user_id IN (?)", userIDs); err != nil {
+	if err := selectIn(ctx, tx, &themeModels, "SELECT * FROM themes WHERE user_id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
 	// 後のループが user ID で引けるようにする。SQL は出さない。
@@ -675,7 +687,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 
 	// 旧 fillUserResponse の SELECT icon_hash FROM icons WHERE user_id = ? を、user ID の IN 1回にする。
 	var iconModels []iconHashModel
-	if err := selectIn(ctx, tx, &iconModels, "SELECT user_id, icon_hash FROM icons WHERE user_id IN (?)", userIDs); err != nil {
+	if err := selectIn(ctx, tx, &iconModels, "SELECT user_id, icon_hash FROM icons WHERE user_id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
 	iconHashByUserID := make(map[int64]string, len(iconModels))
@@ -693,7 +705,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 		if !ok {
 			iconHash = defaultIconHash
 		}
-		users[userModel.ID] = User{
+		user := User{
 			ID:          userModel.ID,
 			Name:        userModel.Name,
 			DisplayName: userModel.DisplayName,
@@ -704,6 +716,8 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 			},
 			IconHash: iconHash,
 		}
+		users[userModel.ID] = user
+		cacheUser(ctx, userModel.ID, &user)
 	}
 	return users, nil
 }
