@@ -1,0 +1,17 @@
+# table	index_name	columns	primary_query
+icons	idx_icons_user_id	user_id	fill / icons by user_id
+icons	idx_icons_user_id_icon_hash	user_id,icon_hash	fillUsersByIDs: SELECT user_id, icon_hash WHERE user_id IN (?)
+themes	idx_themes_user_id	user_id	fillUsersByIDs themes IN
+livestreams	idx_livestreams_user_id	user_id	GET user livestreams, stats JOIN
+reservation_slots	idx_reservation_slots_start_at_end_at	start_at,end_at	reserve FOR UPDATE range
+livestream_tags	idx_livestream_tags_livestream_id	livestream_id	tagsByLivestreamID IN
+livestream_tags	idx_livestream_tags_tag_id	tag_id	tag filter (legacy)
+livestream_tags	idx_livestream_tags_tag_id_livestream_id	tag_id,livestream_id	search tag ORDER BY livestream_id DESC
+livestream_viewers_history	idx_livestream_viewers_history_livestream_id_user_id	livestream_id,user_id	exit DELETE, stats COUNT
+livecomments	idx_livecomments_livestream_id_created_at	livestream_id,created_at	GET comments ORDER BY created_at DESC
+livecomments	idx_livecomments_tip	tip	payment SUM(tip)
+livecomment_reports	idx_livecomment_reports_livestream_id	livestream_id	GET reports by livestream
+ng_words	ng_words_word	word	(legacy schema)
+ng_words	idx_ng_words_user_id_livestream_id	user_id,livestream_id	GET ngwords, POST comment spam check
+ng_words	idx_ng_words_livestream_id	livestream_id	moderate DELETE EXISTS ng_words
+reactions	idx_reactions_livestream_id_created_at	livestream_id,created_at	GET reactions ORDER BY created_at DESC

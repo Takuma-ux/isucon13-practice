@@ -18,6 +18,7 @@ CREATE TABLE `icons` (
   `icon_hash` VARCHAR(64) NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 CREATE INDEX idx_icons_user_id ON icons (`user_id`);
+CREATE INDEX idx_icons_user_id_icon_hash ON icons (`user_id`, `icon_hash`);
 
 -- ユーザごとのカスタムテーマ
 CREATE TABLE `themes` (
@@ -64,6 +65,7 @@ CREATE TABLE `livestream_tags` (
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 CREATE INDEX idx_livestream_tags_livestream_id ON livestream_tags (`livestream_id`);
 CREATE INDEX idx_livestream_tags_tag_id ON livestream_tags (`tag_id`);
+CREATE INDEX idx_livestream_tags_tag_id_livestream_id ON livestream_tags (`tag_id`, `livestream_id`);
 
 -- ライブ配信視聴履歴
 CREATE TABLE `livestream_viewers_history` (
