@@ -683,11 +683,11 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	for _, m := range livecommentRowModels {
 		user, ok := usersByID[m.UserID]
 		if !ok {
-			return nil, sql.ErrNoRows
+			continue
 		}
 		livestream, ok := livestreamByID[m.LivestreamID]
 		if !ok {
-			return nil, fmt.Errorf("livestream not found: %d", m.LivestreamID)
+			continue
 		}
 		livecommentByID[m.ID] = Livecomment{
 			ID:         m.ID,
@@ -707,7 +707,7 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 		}
 		reporter, ok := usersByID[rm.UserID]
 		if !ok {
-			return nil, sql.ErrNoRows
+			continue
 		}
 		reports = append(reports, LivecommentReport{
 			ID:          rm.ID,
