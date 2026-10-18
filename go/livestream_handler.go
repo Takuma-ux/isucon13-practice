@@ -495,17 +495,20 @@ func getLivecommentReportsHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	var livestreamModel LivestreamModel
-	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
-	}
-
 	// error already check
 	sess, _ := session.Get(defaultSessionIDKey, c)
 	// existence already check
 	userID := sess.Values[defaultUserIDKey].(int64)
 
-	if livestreamModel.UserID != userID {
+	var ownerID int64
+	if err := tx.GetContext(ctx, &ownerID, "SELECT user_id FROM livestreams WHERE id = ?", livestreamID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "not found livestream that has the given id")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
+	}
+
+	if ownerID != userID {
 		return echo.NewHTTPError(http.StatusForbidden, "can't get other streamer's livecomment reports")
 	}
 
@@ -613,11 +616,23 @@ func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (
 	}
 	livestreamIDs = uniqueInt64(livestreamIDs)
 
+	missIDs := make([]int64, 0, len(livestreamIDs))
+	for _, id := range livestreamIDs {
+		if cached, ok := getLivestreamFromCache(ctx, id); ok {
+			livestreamByID[id] = *cached
+			continue
+		}
+		missIDs = append(missIDs, id)
+	}
+	if len(missIDs) == 0 {
+		return livestreamByID, nil
+	}
+
 	var livestreamRowModels []LivestreamModel
-	if err := selectIn(ctx, tx, &livestreamRowModels, "SELECT * FROM livestreams WHERE id IN (?)", livestreamIDs); err != nil {
+	if err := selectIn(ctx, tx, &livestreamRowModels, "SELECT * FROM livestreams WHERE id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
-	if len(livestreamRowModels) != len(livestreamIDs) {
+	if len(livestreamRowModels) != len(missIDs) {
 		return nil, sql.ErrNoRows
 	}
 	livestreamPtrs := make([]*LivestreamModel, len(livestreamRowModels))
