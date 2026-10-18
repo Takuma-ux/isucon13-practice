@@ -240,20 +240,18 @@ type PostIconResponse struct {
 	ID int64 `json:"id"`
 }
 
+func iconStrongETag(iconHash string) string {
+	return `"` + iconHash + `"`
+}
+
 func getIconHandler(c echo.Context) error {
 	ctx := c.Request().Context()
 	ctx = withResponseCache(ctx)
 
 	username := c.Param("username")
 
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
-	}
-	defer tx.Rollback()
-
-	var user UserModel
-	if err := tx.GetContext(ctx, &user, "SELECT * FROM users WHERE name = ?", username); err != nil {
+	var userID int64
+	if err := dbConn.GetContext(ctx, &userID, "SELECT id FROM users WHERE name = ?", username); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
@@ -263,7 +261,7 @@ func getIconHandler(c echo.Context) error {
 	ifNoneMatch := strings.TrimSpace(c.Request().Header.Get("If-None-Match"))
 	if ifNoneMatch != "" {
 		currentHash := defaultIconHash
-		if err := tx.GetContext(ctx, &currentHash, "SELECT icon_hash FROM icons WHERE user_id = ?", user.ID); err != nil {
+		if err := dbConn.GetContext(ctx, &currentHash, "SELECT icon_hash FROM icons WHERE user_id = ?", userID); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 			}
@@ -273,15 +271,20 @@ func getIconHandler(c echo.Context) error {
 		}
 	}
 
-	var image []byte
-	if err := tx.GetContext(ctx, &image, "SELECT image FROM icons WHERE user_id = ?", user.ID); err != nil {
+	var iconRow struct {
+		Image    []byte `db:"image"`
+		IconHash string `db:"icon_hash"`
+	}
+	if err := dbConn.GetContext(ctx, &iconRow, "SELECT image, icon_hash FROM icons WHERE user_id = ?", userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			c.Response().Header().Set("ETag", iconStrongETag(defaultIconHash))
 			return c.Blob(http.StatusOK, "image/jpeg", fallbackImageBytes)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 	}
 
-	return c.Blob(http.StatusOK, "image/jpeg", image)
+	c.Response().Header().Set("ETag", iconStrongETag(iconRow.IconHash))
+	return c.Blob(http.StatusOK, "image/jpeg", iconRow.Image)
 }
 
 func postIconHandler(c echo.Context) error {
