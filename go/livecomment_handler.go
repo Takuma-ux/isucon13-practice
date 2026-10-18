@@ -635,9 +635,21 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	if err := selectIn(ctx, tx, &livestreamRowModels, "SELECT * FROM livestreams WHERE id IN (?)", livestreamIDs); err != nil {
 		return nil, err
 	}
-	if len(livestreamRowModels) != len(livestreamIDs) {
-		return nil, sql.ErrNoRows
+	livestreamModelByID := make(map[int64]LivestreamModel, len(livestreamRowModels))
+	for _, ls := range livestreamRowModels {
+		livestreamModelByID[ls.ID] = ls
 	}
+
+	filteredComments := make([]LivecommentModel, 0, len(livecommentRowModels))
+	for _, m := range livecommentRowModels {
+		if _, ok := livestreamModelByID[m.LivestreamID]; ok {
+			filteredComments = append(filteredComments, m)
+		}
+	}
+	if len(filteredComments) == 0 {
+		return []LivecommentReport{}, nil
+	}
+	livecommentRowModels = filteredComments
 
 	userIDs := make([]int64, 0, len(reporterIDs)+len(livecommentRowModels)+len(livestreamRowModels))
 	userIDs = append(userIDs, reporterIDs...)
@@ -710,14 +722,27 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 // fillLivecommentReportResponseWithLivestream は POST 通報用。ハンドラが既に取得した
 // livestream / livecomment 行を fillLivecommentResponseWithLivestream に渡し、再 SELECT を避ける。
 func fillLivecommentReportResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, reportModel LivecommentReportModel, livecommentModel LivecommentModel, livestreamModel LivestreamModel) (LivecommentReport, error) {
-	livecomment, err := fillLivecommentResponseWithLivestream(ctx, tx, livecommentModel, livestreamModel)
+	if livecommentModel.LivestreamID != livestreamModel.ID {
+		return LivecommentReport{}, fmt.Errorf("livestream not found: %d", livecommentModel.LivestreamID)
+	}
+
+	userIDs := uniqueInt64([]int64{reportModel.UserID, livecommentModel.UserID, livestreamModel.UserID})
+	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
 	if err != nil {
 		return LivecommentReport{}, err
 	}
 
-	usersByID, err := fillUsersByIDs(ctx, tx, []int64{reportModel.UserID})
+	livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamModel.ID}, usersByID)
 	if err != nil {
 		return LivecommentReport{}, err
+	}
+	if len(livestreams) != 1 {
+		return LivecommentReport{}, sql.ErrNoRows
+	}
+
+	user, ok := usersByID[livecommentModel.UserID]
+	if !ok {
+		return LivecommentReport{}, sql.ErrNoRows
 	}
 	reporter, ok := usersByID[reportModel.UserID]
 	if !ok {
@@ -727,7 +752,14 @@ func fillLivecommentReportResponseWithLivestream(ctx context.Context, tx *sqlx.T
 	return LivecommentReport{
 		ID:          reportModel.ID,
 		Reporter:    reporter,
-		Livecomment: livecomment,
-		CreatedAt:   reportModel.CreatedAt,
+		Livecomment: Livecomment{
+			ID:         livecommentModel.ID,
+			User:       user,
+			Livestream: livestreams[0],
+			Comment:    livecommentModel.Comment,
+			Tip:        livecommentModel.Tip,
+			CreatedAt:  livecommentModel.CreatedAt,
+		},
+		CreatedAt: reportModel.CreatedAt,
 	}, nil
 }
