@@ -22,7 +22,7 @@ Config in this directory is **inert** until copied or applied on the **competiti
 
 | File | Purpose |
 |------|---------|
-| `nginx/isupipe.conf` | TLS vhost: `access_log off`, static `/assets/` cache, `/api` proxy + buffers + upstream keepalive |
+| `nginx/isupipe.conf` | TLS vhost: session cache/tickets, `access_log off`, static `/assets/` cache, `/api` proxy + buffers + upstream keepalive |
 | `nginx/nginx-main-snippet.conf` | `worker_processes auto`, `worker_rlimit_nofile 65535`, `worker_connections 4096` — merge into `/etc/nginx/nginx.conf` |
 | `nginx/conf.d/isucon-http-tuning.conf` | `keepalive_timeout 65` — copy to `/etc/nginx/conf.d/` |
 
@@ -44,6 +44,7 @@ sudo CONFIRM_NGINX_RELOAD=yes systemctl reload nginx
 - `innodb_flush_log_at_trx_commit = 2`
 - `performance_schema = OFF`
 - `table_open_cache = 4096`, `thread_cache_size = 64`
+- `log_bin = OFF`, `general_log = OFF` (single-node; avoids binlog DML overhead and accidental full query logging)
 - `skip_name_resolve`, `max_connections = 500`
 
 Verify (read-only): `./provisioning/verify-mysql-tuning.sh`

@@ -80,6 +80,10 @@ innodb_flush_log_at_trx_commit = 2
 performance_schema = OFF
 table_open_cache = 4096
 thread_cache_size = 64
+# Single-node bench host: no replicas; binlog adds write overhead on every DML.
+log_bin = OFF
+# Must stay off in production bench (every query to disk if enabled).
+general_log = OFF
 "
 
 	if [[ "${MYSQL_TUNING_DRY_RUN:-}" == "1" ]]; then

@@ -250,15 +250,25 @@ type ErrorResponse struct {
 }
 
 func errorResponseHandler(err error, c echo.Context) {
-	c.Logger().Errorf("error at %s: %+v", c.Path(), err)
 	if he, ok := err.(*echo.HTTPError); ok {
+		logHTTPError(c, he.Code, err)
 		if e := c.JSON(he.Code, &ErrorResponse{Error: err.Error()}); e != nil {
 			c.Logger().Errorf("%+v", e)
 		}
 		return
 	}
 
+	c.Logger().Errorf("error at %s: %+v", c.Path(), err)
 	if e := c.JSON(http.StatusInternalServerError, &ErrorResponse{Error: err.Error()}); e != nil {
 		c.Logger().Errorf("%+v", e)
 	}
+}
+
+func logHTTPError(c echo.Context, code int, err error) {
+	if code >= http.StatusInternalServerError {
+		c.Logger().Errorf("error at %s: %+v", c.Path(), err)
+		return
+	}
+	// Expected client rejections (validation, auth, spam filter, etc.) — avoid ERROR log I/O under bench load.
+	c.Logger().Debugf("client error at %s (%d): %+v", c.Path(), code, err)
 }
