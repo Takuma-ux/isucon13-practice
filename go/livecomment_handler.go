@@ -175,13 +175,12 @@ func postLivecommentHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	var livestreamModel LivestreamModel
-	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
-		} else {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
-		}
+	livestreamModel, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
+	}
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
 	}
 
 	// スパム判定 (Go側でstrings.Containsを使い、DBクエリを削減)
@@ -257,13 +256,12 @@ func reportLivecommentHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	var livestreamModel LivestreamModel
-	if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
-		} else {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
-		}
+	livestreamModel, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
+	}
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
 	}
 
 	var livecommentModel LivecommentModel
@@ -347,11 +345,14 @@ func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngW
 	}
 	defer tx.Rollback()
 
-	var ownedLivestreams []LivestreamModel
-	if err := tx.SelectContext(ctx, &ownedLivestreams, "SELECT * FROM livestreams WHERE id = ? AND user_id = ?", livestreamID, userID); err != nil {
+	owned, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, errModerateNotOwner
+	}
+	if err != nil {
 		return 0, fmt.Errorf("%w: %w", errModerateGetLivestreams, err)
 	}
-	if len(ownedLivestreams) == 0 {
+	if owned.UserID != userID {
 		return 0, errModerateNotOwner
 	}
 
@@ -469,8 +470,8 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 		livestreamPtr = assembled
 		cacheLivestream(ctx, livestreamID, livestreamPtr)
 	} else {
-		var livestreamModel LivestreamModel
-		if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
+		livestreamModel, err := getLivestreamModelByID(ctx, tx, livestreamID)
+		if err != nil {
 			return nil, err
 		}
 
@@ -600,9 +601,16 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	}
 	livestreamIDs = uniqueInt64(livestreamIDs)
 
-	livestreamRowModels := make([]LivestreamModel, 0, len(livestreamIDs))
-	if err := selectIn(ctx, tx, &livestreamRowModels, "SELECT * FROM livestreams WHERE id IN (?)", livestreamIDs); err != nil {
-		return nil, err
+	livestreamRowModels, missLivestreamIDs := livestreamModelsFromProcessCache(livestreamIDs)
+	if len(missLivestreamIDs) > 0 {
+		fetched := make([]LivestreamModel, 0, len(missLivestreamIDs))
+		if err := selectIn(ctx, tx, &fetched, "SELECT * FROM livestreams WHERE id IN (?)", missLivestreamIDs); err != nil {
+			return nil, err
+		}
+		for i := range fetched {
+			putLivestreamRowCache(&fetched[i])
+			livestreamRowModels = append(livestreamRowModels, fetched[i])
+		}
 	}
 	livestreamModelByID := make(map[int64]LivestreamModel, len(livestreamRowModels))
 	for _, ls := range livestreamRowModels {

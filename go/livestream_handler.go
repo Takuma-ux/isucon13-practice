@@ -459,8 +459,7 @@ func getLivestreamHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	livestreamModel := LivestreamModel{}
-	err = tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID)
+	livestreamModel, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusNotFound, "not found livestream that has the given id")
 	}
@@ -505,15 +504,15 @@ func getLivecommentReportsHandler(c echo.Context) error {
 	// existence already check
 	userID := sess.Values[defaultUserIDKey].(int64)
 
-	var ownerID int64
-	if err := tx.GetContext(ctx, &ownerID, "SELECT user_id FROM livestreams WHERE id = ?", livestreamID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "not found livestream that has the given id")
-		}
+	livestreamModel, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return echo.NewHTTPError(http.StatusNotFound, "not found livestream that has the given id")
+	}
+	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
 	}
 
-	if ownerID != userID {
+	if livestreamModel.UserID != userID {
 		return echo.NewHTTPError(http.StatusForbidden, "can't get other streamer's livecomment reports")
 	}
 
@@ -629,7 +628,7 @@ func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestr
 			StartAt:      livestreamModel.StartAt,
 			EndAt:        livestreamModel.EndAt,
 		}
-		putLivestreamShellCache(livestreamShellFromModel(livestreamModel, tags))
+		putLivestreamShellCache(livestreamShellFromModel(livestreamModel, tags, true))
 		putUserProfileCache(owner, snapshotUserProfileCacheEpoch(owner.ID))
 		cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
 	}
@@ -646,6 +645,7 @@ func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (
 	livestreamIDs = uniqueInt64(livestreamIDs)
 
 	missIDs := make([]int64, 0, len(livestreamIDs))
+	livestreamRowModels := make([]LivestreamModel, 0, len(livestreamIDs))
 	for _, id := range livestreamIDs {
 		if cached, ok := getLivestreamFromCache(ctx, id); ok {
 			livestreamByID[id] = *cached
@@ -656,18 +656,27 @@ func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (
 			cacheLivestream(ctx, id, assembled)
 			continue
 		}
+		if shell, ok := getLivestreamShellFromProcessCache(id); ok {
+			livestreamRowModels = append(livestreamRowModels, livestreamModelFromShell(shell))
+			continue
+		}
 		missIDs = append(missIDs, id)
 	}
-	if len(missIDs) == 0 {
+	if len(missIDs) > 0 {
+		fetched := make([]LivestreamModel, 0, len(missIDs))
+		if err := selectIn(ctx, tx, &fetched, "SELECT * FROM livestreams WHERE id IN (?)", missIDs); err != nil {
+			return nil, err
+		}
+		if len(fetched) != len(missIDs) {
+			return nil, sql.ErrNoRows
+		}
+		for i := range fetched {
+			putLivestreamRowCache(&fetched[i])
+			livestreamRowModels = append(livestreamRowModels, fetched[i])
+		}
+	}
+	if len(livestreamRowModels) == 0 {
 		return livestreamByID, nil
-	}
-
-	livestreamRowModels := make([]LivestreamModel, 0, len(missIDs))
-	if err := selectIn(ctx, tx, &livestreamRowModels, "SELECT * FROM livestreams WHERE id IN (?)", missIDs); err != nil {
-		return nil, err
-	}
-	if len(livestreamRowModels) != len(missIDs) {
-		return nil, sql.ErrNoRows
 	}
 	livestreamPtrs := make([]*LivestreamModel, len(livestreamRowModels))
 	for i := range livestreamRowModels {

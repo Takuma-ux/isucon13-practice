@@ -525,6 +525,46 @@ func TestProcessCacheUnguardedPutWouldPoisonCache(t *testing.T) {
 	t.Log("without epoch guard, unconditional put after invalidate can repopulate stale icon_hash (production now rejects via fillEpoch)")
 }
 
+// TestProcessCacheLivestreamRowRepeatGET confirms getLivestreamHandler skips livestreams row SELECT on cache hit.
+func TestProcessCacheLivestreamRowRepeatGET(t *testing.T) {
+	db := processCacheTestDB(t)
+	dbConn = db
+	invalidateProcessReadCaches()
+	ctx := context.Background()
+
+	var lsID int64
+	if err := db.GetContext(ctx, &lsID, "SELECT id FROM livestreams ORDER BY id LIMIT 1"); err != nil {
+		t.Fatalf("livestream id: %v", err)
+	}
+
+	e := newProcessCacheTestEcho()
+	cookie := loginTestUser(t, e, "test001", "test")
+	path := fmt.Sprintf("/api/livestream/%d", lsID)
+
+	code, _ := getJSON(t, e, http.MethodGet, path, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("warm get: %d", code)
+	}
+
+	start, err := mysqlSessionQuestions(db)
+	if err != nil {
+		t.Fatalf("questions: %v", err)
+	}
+	code, _ = getJSON(t, e, http.MethodGet, path, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("second get: %d", code)
+	}
+	end, err := mysqlSessionQuestions(db)
+	if err != nil {
+		t.Fatalf("questions end: %v", err)
+	}
+	delta := end - start
+	t.Logf("second GET /api/livestream/:id Questions delta=%d (expect no livestreams row SELECT; typically 0-2 for txn overhead)", delta)
+	if delta > 3 {
+		t.Fatalf("expected near-zero SQL for cached row repeat get, got Questions delta=%d", delta)
+	}
+}
+
 func TestProcessCacheMutexSmoke(t *testing.T) {
 	invalidateProcessReadCaches()
 	var wg sync.WaitGroup

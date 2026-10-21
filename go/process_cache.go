@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+
+	"github.com/jmoiron/sqlx"
 	"sync"
 )
 
@@ -16,6 +20,8 @@ type LivestreamShell struct {
 	Tags         []Tag
 	StartAt      int64
 	EndAt        int64
+	// tagsResolved is true after fill loaded livestream_tags; row-only cache entries leave this false.
+	tagsResolved bool
 }
 
 var (
@@ -81,13 +87,14 @@ func putLivestreamShellCache(shell *LivestreamShell) {
 		Tags:         append([]Tag(nil), tags...),
 		StartAt:      shell.StartAt,
 		EndAt:        shell.EndAt,
+		tagsResolved: shell.tagsResolved,
 	}
 	livestreamShellCacheMu.Lock()
 	livestreamShellCache[shell.ID] = stored
 	livestreamShellCacheMu.Unlock()
 }
 
-func livestreamShellFromModel(model *LivestreamModel, tags []Tag) *LivestreamShell {
+func livestreamShellFromModel(model *LivestreamModel, tags []Tag, tagsResolved bool) *LivestreamShell {
 	if tags == nil {
 		tags = []Tag{}
 	}
@@ -101,7 +108,65 @@ func livestreamShellFromModel(model *LivestreamModel, tags []Tag) *LivestreamShe
 		Tags:         append([]Tag(nil), tags...),
 		StartAt:      model.StartAt,
 		EndAt:        model.EndAt,
+		tagsResolved: tagsResolved,
 	}
+}
+
+func livestreamModelFromShell(shell *LivestreamShell) LivestreamModel {
+	return LivestreamModel{
+		ID:           shell.ID,
+		UserID:       shell.OwnerUserID,
+		Title:        shell.Title,
+		Description:  shell.Description,
+		PlaylistUrl:  shell.PlaylistUrl,
+		ThumbnailUrl: shell.ThumbnailUrl,
+		StartAt:      shell.StartAt,
+		EndAt:        shell.EndAt,
+	}
+}
+
+// putLivestreamRowCache stores immutable livestream row fields; does not downgrade a tagsResolved shell.
+func putLivestreamRowCache(model *LivestreamModel) {
+	if model == nil {
+		return
+	}
+	livestreamShellCacheMu.Lock()
+	defer livestreamShellCacheMu.Unlock()
+	if ex, ok := livestreamShellCache[model.ID]; ok && ex != nil && ex.tagsResolved {
+		return
+	}
+	shell := livestreamShellFromModel(model, []Tag{}, false)
+	livestreamShellCache[model.ID] = shell
+}
+
+// getLivestreamModelByID returns the livestreams row, using process cache before SELECT.
+func livestreamModelsFromProcessCache(livestreamIDs []int64) ([]LivestreamModel, []int64) {
+	models := make([]LivestreamModel, 0, len(livestreamIDs))
+	miss := make([]int64, 0, len(livestreamIDs))
+	for _, id := range livestreamIDs {
+		if shell, ok := getLivestreamShellFromProcessCache(id); ok {
+			models = append(models, livestreamModelFromShell(shell))
+			continue
+		}
+		miss = append(miss, id)
+	}
+	return models, miss
+}
+
+func getLivestreamModelByID(ctx context.Context, tx *sqlx.Tx, livestreamID int64) (LivestreamModel, error) {
+	if shell, ok := getLivestreamShellFromProcessCache(livestreamID); ok {
+		return livestreamModelFromShell(shell), nil
+	}
+	var model LivestreamModel
+	err := tx.GetContext(ctx, &model, "SELECT * FROM livestreams WHERE id = ?", livestreamID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return LivestreamModel{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return LivestreamModel{}, err
+	}
+	putLivestreamRowCache(&model)
+	return model, nil
 }
 
 func getUserProfileFromProcessCache(userID int64) (*User, bool) {
@@ -159,7 +224,7 @@ func resolveOwnerUser(ctx context.Context, ownerUserID int64, owners map[int64]*
 
 func assembleLivestreamFromProcessCache(ctx context.Context, livestreamID int64, owners map[int64]*User) (*Livestream, bool) {
 	shell, ok := getLivestreamShellFromProcessCache(livestreamID)
-	if !ok {
+	if !ok || !shell.tagsResolved {
 		return nil, false
 	}
 	owner, ok := resolveOwnerUser(ctx, shell.OwnerUserID, owners)
