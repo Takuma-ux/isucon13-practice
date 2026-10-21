@@ -37,7 +37,7 @@ When you do not have a bench `.prof` file:
 ./scripts/capture-pgo.sh
 ```
 
-This starts the app (if not running), runs `cmd/loadbench` for ~45s, captures a overlapping CPU profile from `:6060`, and writes `go/default.pgo`.
+This starts the app (if not running), runs `cmd/loadbench` (default **120s**, **60s** warmup before capture), captures a **30s** CPU profile from `:6060`, and writes `go/default.pgo`. Override with `LOAD_DURATION`, `PGO_WARMUP_SECONDS`, `PGO_PROFILE_SECONDS`, `LOAD_WORKERS`.
 
 Interim profiles are **less representative** than a real bench (no DNS torture, different concurrency), but better than no PGO.
 

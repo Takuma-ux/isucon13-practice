@@ -8,7 +8,9 @@ GO_DIR="$ROOT/go"
 BIN="${TMPDIR:-/tmp}/isupipe-pgo-capture"
 PPROF_OUT="${TMPDIR:-/tmp}/isupipe-cpu.prof"
 PROFILE_SEC="${PGO_PROFILE_SECONDS:-30}"
-LOAD_DURATION="${LOAD_DURATION:-45s}"
+# Warmup before CPU capture so process caches (shell/user/tags) are hot — profile reflects post-caching paths, not cold-start stampedes.
+PGO_WARMUP_SECONDS="${PGO_WARMUP_SECONDS:-60}"
+LOAD_DURATION="${LOAD_DURATION:-120s}"
 LOAD_WORKERS="${LOAD_WORKERS:-30}"
 
 if ! mysqladmin ping -h127.0.0.1 -uisucon -pisucon &>/dev/null; then
@@ -49,7 +51,8 @@ echo "Load: workers=$LOAD_WORKERS duration=$LOAD_DURATION livestream=$LSID strea
 ) &
 LOAD_PID=$!
 
-sleep 5
+echo "Warming caches (${PGO_WARMUP_SECONDS}s of load before profile capture)..."
+sleep "$PGO_WARMUP_SECONDS"
 echo "Capturing CPU profile (${PROFILE_SEC}s) from :6060..."
 curl -sS -o "$PPROF_OUT" "http://127.0.0.1:6060/debug/pprof/profile?seconds=${PROFILE_SEC}"
 
@@ -57,12 +60,16 @@ wait "$LOAD_PID" 2>/dev/null || true
 
 go tool pprof -proto -output="$GO_DIR/default.pgo" "$PPROF_OUT"
 META="$GO_DIR/default.pgo.meta"
+GENERATED_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat >"$META" <<EOF
 # Metadata for default.pgo (NOT used by the Go compiler — for humans only)
 #
 # STATUS: INTERIM / SYNTHETIC — NOT production-validated
 #
-# Generated: $(date -u +%Y-%m-%d) via go/scripts/capture-pgo.sh (cmd/loadbench synthetic traffic)
+# Generated: ${GENERATED_UTC} via go/scripts/capture-pgo.sh
+# Traffic:   cmd/loadbench (workers=${LOAD_WORKERS}, duration=${LOAD_DURATION})
+# Warmup:    ${PGO_WARMUP_SECONDS}s load before ${PROFILE_SEC}s CPU capture (process shell/user caches hot)
+# Profile:   reflects post-caching hot paths (not cold-cache startup burst)
 # Source prof: $PPROF_OUT
 #
 # Replace from a REAL bench pprof capture before competition — see PGO.md
