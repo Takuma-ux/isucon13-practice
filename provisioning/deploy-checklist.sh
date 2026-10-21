@@ -23,6 +23,9 @@ print_checklist() {
       cd $ROOT && git pull
 
 ── 2. Build app ──
+  [ ] Optional PGO: capture default.pgo during bench (see go/PGO.md); file must live in go/
+  [ ] Safe CPU target (unknown instance type): GOAMD64=v2 go build -o ../isupipe ./
+      (see go/BUILD.md — use v3 only after confirming avx2 on the server)
   [ ] cd go && go build -o ../isupipe ./   # or your AMI's build path / systemd unit
 
 ── 3. MySQL indexes ──

@@ -1,0 +1,17 @@
+# Metadata for default.pgo (NOT used by the Go compiler — for humans only)
+#
+# STATUS: INTERIM / SYNTHETIC — NOT production-validated
+#
+# This default.pgo was generated from LOCAL loadbench synthetic traffic
+# (go/scripts/capture-pgo.sh + cmd/loadbench), NOT from official competition
+# benchmark traffic.
+#
+# Generated: 2026-10-21 (local dev host)
+# Source:     http://127.0.0.1:6060/debug/pprof/profile during loadbench run
+#
+# You MUST replace default.pgo (and update this file) from a REAL bench run's
+# pprof capture before relying on PGO for the actual competition. A stale or
+# unrepresentative profile builds fine (no error) but steers inlining toward the
+# wrong hot paths.
+#
+# How to regenerate from a real bench: see PGO.md section "Capture during a real bench run"

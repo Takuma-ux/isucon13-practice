@@ -94,6 +94,11 @@ ISUCON ansible in the official repo does **not** set `noatime` on `/`. Typical U
 
 Skipping atime updates reduces metadata writes on static file reads under `public/` and nginx `sendfile`.
 
+## App build (PGO + GOAMD64)
+
+- **PGO:** `go/PGO.md` — `default.pgo` in `go/` (auto-used by `go build`); capture during bench via `:6060` or `./go/scripts/capture-pgo.sh`.
+- **CPU level:** `go/BUILD.md` — default **`GOAMD64=v2`** on unknown EC2; verify `avx2` in `/proc/cpuinfo` before `v3`.
+
 ## Full server apply (EC2)
 
 ```bash
