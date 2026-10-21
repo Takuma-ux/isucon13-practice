@@ -1,5 +1,10 @@
 # Go / Rust / Node などのビルド成果物・依存関係
 isupipe
+go/isucon13
+go/isucon13-*
+
+# Provisioning dry-run / audit outputs (not source)
+provisioning/_verify_*
 *.o
 *.a
 *.so

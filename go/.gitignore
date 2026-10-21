@@ -2,6 +2,10 @@ isupipe
 isupipe_darwin
 local.env
 
+# Ad-hoc local binary names (smoke/verify/audit builds); ship isupipe only.
+isucon13
+isucon13-*
+
 # Created by https://www.toptal.com/developers/gitignore/api/go,macos,windows,linux
 # Edit at https://www.toptal.com/developers/gitignore?templates=go,macos,windows,linux
 
