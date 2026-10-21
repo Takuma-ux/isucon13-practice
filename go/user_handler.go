@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo-contrib/session"
@@ -22,10 +21,9 @@ import (
 )
 
 const (
-	defaultSessionIDKey      = "SESSIONID"
+	defaultSessionIDKey      = "SESSIONID" // cookie / session store name (not a sess.Values key)
 	defaultSessionExpiresKey = "EXPIRES"
 	defaultUserIDKey         = "USERID"
-	defaultUsernameKey       = "USERNAME"
 	bcryptDefaultCost        = bcrypt.MinCost
 )
 
@@ -532,8 +530,6 @@ func loginHandler(c echo.Context) error {
 
 	sessionEndAt := time.Now().Add(1 * time.Hour)
 
-	sessionID := uuid.NewString()
-
 	sess, err := session.Get(defaultSessionIDKey, c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "failed to get session")
@@ -544,9 +540,7 @@ func loginHandler(c echo.Context) error {
 		MaxAge: int(60000),
 		Path:   "/",
 	}
-	sess.Values[defaultSessionIDKey] = sessionID
 	sess.Values[defaultUserIDKey] = userModel.ID
-	sess.Values[defaultUsernameKey] = userModel.Name
 	sess.Values[defaultSessionExpiresKey] = sessionEndAt.Unix()
 
 	if err := sess.Save(c.Request(), c.Response()); err != nil {
