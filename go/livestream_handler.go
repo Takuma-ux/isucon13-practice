@@ -209,6 +209,12 @@ func searchLivestreamsHandler(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get tags: "+err.Error())
 		}
+		if len(tagIDList) == 0 {
+			if err := tx.Commit(); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+			}
+			return c.JSON(http.StatusOK, []Livestream{})
+		}
 
 		query, params, err := sqlx.In("SELECT * FROM livestream_tags WHERE tag_id IN (?) ORDER BY livestream_id DESC", tagIDList)
 		if err != nil {

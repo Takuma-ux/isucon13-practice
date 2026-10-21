@@ -433,7 +433,7 @@ func moderateHandler(c echo.Context) error {
 		}
 		return moderateHandlerError(lastErr)
 	}
-	return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old livecomments that hit spams: "+lastErr.Error())
+	return moderateHandlerError(lastErr)
 }
 
 func moderateHandlerError(err error) *echo.HTTPError {
