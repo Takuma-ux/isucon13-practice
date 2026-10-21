@@ -10,7 +10,9 @@ Config in this directory is **inert** until copied or applied on the **competiti
 | `apply.sh` preview | `INFRA_DRY_RUN=1` (no `/etc` writes, no reloads) |
 | `apply-mysql-tuning.sh` | `CONFIRM_MYSQL_TUNING=yes` or interactive `yes`; **uses this machine's RAM** |
 | MySQL preview | `MYSQL_TUNING_DRY_RUN=1` |
+| MySQL slow log (diagnostic bench) | `CONFIRM_SLOW_LOG=yes` + `apply-mysql-slow-log.sh on\|off`; preview `MYSQL_SLOW_LOG_DRY_RUN=1` |
 | Nginx reload | **Manual:** `nginx -t` then `CONFIRM_NGINX_RELOAD=yes systemctl reload nginx` (script does not auto-reload) |
+| Full deploy order | `./provisioning/deploy-checklist.sh` (checklist); `--preflight` / `--dry-run` |
 
 **Never** restart MySQL or reload nginx locally to “test” tuning. Use dry-run and inspect generated config only.
 
@@ -25,6 +27,8 @@ Config in this directory is **inert** until copied or applied on the **competiti
 | `nginx/isupipe.conf` | TLS vhost: session cache/tickets, `access_log off`, static `/assets/` cache, `/api` proxy + buffers + upstream keepalive |
 | `nginx/nginx-main-snippet.conf` | `worker_processes auto`, `worker_rlimit_nofile 65535`, `worker_connections 4096` — merge into `/etc/nginx/nginx.conf` |
 | `nginx/conf.d/isucon-http-tuning.conf` | `keepalive_timeout 65` — copy to `/etc/nginx/conf.d/` |
+| `nginx/conf.d/isucon-alp-logging.conf` | `log_format isucon_ltsv` for alp — copy to `/etc/nginx/conf.d/` |
+| `nginx/isupipe.access-log-snippet.conf` | One-line `access_log` to swap in for a diagnostic bench run |
 
 Official reference vhost had **no** `access_log` override (global access log stayed on). This repo disables access logging on the app vhost explicitly.
 
@@ -49,6 +53,34 @@ sudo CONFIRM_NGINX_RELOAD=yes systemctl reload nginx
 - `skip_name_resolve`, `max_connections = 500`
 
 Verify (read-only): `./provisioning/verify-mysql-tuning.sh`
+
+## MySQL slow query log (diagnostic bench only)
+
+Overhead if left on — enable only for one analysis run, then disable.
+
+```bash
+# Before bench
+sudo MYSQL_SLOW_LOG_DRY_RUN=1 ./provisioning/apply-mysql-slow-log.sh on   # preview
+sudo CONFIRM_SLOW_LOG=yes ./provisioning/apply-mysql-slow-log.sh on     # writes drop-in + restarts MySQL
+
+# After bench
+sudo pt-query-digest /var/log/mysql/isucon-slow.log
+
+# Turn off (removes drop-in + restarts MySQL)
+sudo CONFIRM_SLOW_LOG=yes ./provisioning/apply-mysql-slow-log.sh off
+```
+
+Drop-in: `/etc/mysql/mysql.conf.d/isucon-slow-log.cnf` (`long_query_time = 0.05`, log file `/var/log/mysql/isucon-slow.log`).
+
+## Nginx access log for alp (diagnostic bench only)
+
+1. Install `conf.d/isucon-alp-logging.conf` (defines `isucon_ltsv` LTSV format).
+2. In the isupipe vhost, replace `access_log off;` with the line from `isupipe.access-log-snippet.conf`.
+3. `sudo nginx -t` && reload with `CONFIRM_NGINX_RELOAD=yes`.
+4. Run bench; analyze: `alp json --file=/var/log/nginx/isucon.access.ltsv` (or `alp ltsv ...` depending on alp version).
+5. Restore `access_log off;` and reload.
+
+Reference upstream had no custom alp format; default `combined` is not ideal for alp.
 
 ## Filesystem `noatime`
 
