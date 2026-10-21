@@ -52,6 +52,21 @@ func loadTagsFromDB(ctx context.Context) (*TagsResponse, error) {
 	return &TagsResponse{Tags: tags}, nil
 }
 
+// lookupTagIDsByName returns tag IDs whose name equals name (empty if none).
+func lookupTagIDsByName(ctx context.Context, name string) ([]int, error) {
+	tagsResponse, err := getCachedTags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int
+	for _, tag := range tagsResponse.Tags {
+		if tag.Name == name {
+			ids = append(ids, int(tag.ID))
+		}
+	}
+	return ids, nil
+}
+
 func getCachedTags(ctx context.Context) (*TagsResponse, error) {
 	tagsCacheMu.RLock()
 	if tagsCache != nil {
