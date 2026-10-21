@@ -31,6 +31,9 @@ print_checklist() {
 ── 3. MySQL indexes ──
   [ ] Check:  ./scripts/ensure_isupipe_indexes.sh --check
   [ ] Apply:  ./scripts/ensure_isupipe_indexes.sh --apply
+  [ ] Optional (existing DB only): ./scripts/drop-ng_words-word-index.sh --check
+      then CONFIRM_DROP_NG_WORDS_WORD=yes ./scripts/drop-ng_words-word-index.sh
+      (fresh init from 10_schema.sql already omits ng_words_word)
       (uses sql/mysql_cli.sh — set ISUCON_DB_* or env.sh unix socket vars)
 
 ── 4. App environment (/home/isucon/env.sh) ──

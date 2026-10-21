@@ -13,6 +13,7 @@ Config in this directory is **inert** until copied or applied on the **competiti
 | MySQL slow log (diagnostic bench) | `CONFIRM_SLOW_LOG=yes` + `apply-mysql-slow-log.sh on\|off`; preview `MYSQL_SLOW_LOG_DRY_RUN=1` |
 | Nginx reload | **Manual:** `nginx -t` then `CONFIRM_NGINX_RELOAD=yes systemctl reload nginx` (script does not auto-reload) |
 | Full deploy order | `./provisioning/deploy-checklist.sh` (checklist); `--preflight` / `--dry-run` |
+| Drop unused `ng_words_word` index (existing DB) | `CONFIRM_DROP_NG_WORDS_WORD=yes ./scripts/drop-ng_words-word-index.sh`; check only: `--check` |
 
 **Never** restart MySQL or reload nginx locally to “test” tuning. Use dry-run and inspect generated config only.
 

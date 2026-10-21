@@ -106,7 +106,7 @@ CREATE TABLE `ng_words` (
   `word` VARCHAR(255) NOT NULL,
   `created_at` BIGINT NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-CREATE INDEX ng_words_word ON ng_words(`word`);
+-- No index on `word` alone: no reference impl queries ng_words by word only (see sql/indexes/manifest.tsv).
 CREATE INDEX idx_ng_words_user_id_livestream_id ON ng_words (`user_id`, `livestream_id`);
 CREATE INDEX idx_ng_words_livestream_id ON ng_words (`livestream_id`);
 

@@ -11,7 +11,7 @@ livestream_viewers_history	idx_livestream_viewers_history_livestream_id_user_id	
 livecomments	idx_livecomments_livestream_id_created_at	livestream_id,created_at	GET comments ORDER BY created_at DESC
 livecomments	idx_livecomments_tip	tip	payment SUM(tip)
 livecomment_reports	idx_livecomment_reports_livestream_id	livestream_id	GET reports by livestream
-ng_words	ng_words_word	word	(legacy schema)
+# DROPPED (unused): ng_words.ng_words_word on (word) — not UNIQUE; no query filters word alone (all langs). Drop on existing DB: scripts/drop-ng_words-word-index.sh
 ng_words	idx_ng_words_user_id_livestream_id	user_id,livestream_id	GET ngwords, POST comment spam check
 ng_words	idx_ng_words_livestream_id	livestream_id	moderate DELETE EXISTS ng_words
 reactions	idx_reactions_livestream_id_created_at	livestream_id,created_at	GET reactions ORDER BY created_at DESC
