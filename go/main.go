@@ -13,6 +13,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -27,6 +28,11 @@ import (
 const (
 	listenPort                     = 8080
 	powerDNSSubdomainAddressEnvKey = "ISUCON13_POWERDNS_SUBDOMAIN_ADDRESS"
+
+	// Slowloris hardening; normal bench/API headers finish in milliseconds.
+	httpReadHeaderTimeout = 10 * time.Second
+	// Nginx client keepalive_timeout is 65s; upstream keepalive default is 60s — stay open slightly longer on the app side.
+	httpIdleTimeout = 75 * time.Second
 )
 
 var (
@@ -236,6 +242,9 @@ func main() {
 
 	// HTTPサーバ起動
 	listenAddr := net.JoinHostPort("", strconv.Itoa(listenPort))
+	e.Server.ReadHeaderTimeout = httpReadHeaderTimeout
+	e.Server.IdleTimeout = httpIdleTimeout
+	// Default MaxHeaderBytes (1 MiB) is ample for session cookie + normal API headers.
 	go func() {
 		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
 	}()
