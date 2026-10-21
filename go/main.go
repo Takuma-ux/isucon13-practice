@@ -73,7 +73,13 @@ func connectDB(logger echo.Logger) (*sqlx.DB, error) {
 	if v, ok := os.LookupEnv(networkTypeEnvKey); ok {
 		conf.Net = v
 	}
-	if addr, ok := os.LookupEnv(addrEnvKey); ok {
+	if conf.Net == "unix" {
+		if addr, ok := os.LookupEnv(addrEnvKey); ok {
+			conf.Addr = addr
+		} else {
+			conf.Addr = "/var/run/mysqld/mysqld.sock"
+		}
+	} else if addr, ok := os.LookupEnv(addrEnvKey); ok {
 		if port, ok2 := os.LookupEnv(portEnvKey); ok2 {
 			conf.Addr = net.JoinHostPort(addr, port)
 		} else {

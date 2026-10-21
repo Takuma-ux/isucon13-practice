@@ -8,16 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST="${ROOT}/sql/indexes/manifest.tsv"
 
-if test -f /home/isucon/env.sh; then
-	# shellcheck disable=SC1091
-	. /home/isucon/env.sh
-fi
-
-ISUCON_DB_HOST=${ISUCON13_MYSQL_DIALCONFIG_ADDRESS:-127.0.0.1}
-ISUCON_DB_PORT=${ISUCON13_MYSQL_DIALCONFIG_PORT:-3306}
-ISUCON_DB_USER=${ISUCON13_MYSQL_DIALCONFIG_USER:-isucon}
-ISUCON_DB_PASSWORD=${ISUCON13_MYSQL_DIALCONFIG_PASSWORD:-isucon}
-ISUCON_DB_NAME=${ISUCON13_MYSQL_DIALCONFIG_DATABASE:-isupipe}
+# shellcheck disable=SC1091
+source "${ROOT}/sql/mysql_cli.sh"
 
 MODE=apply
 if [[ "${1:-}" == "--check" ]]; then
@@ -29,15 +21,12 @@ elif [[ -n "${1:-}" ]]; then
 	exit 2
 fi
 
-mysql_base() {
-	mysql -u"$ISUCON_DB_USER" -p"$ISUCON_DB_PASSWORD" \
-		--host "$ISUCON_DB_HOST" \
-		--port "$ISUCON_DB_PORT" \
-		"$ISUCON_DB_NAME" "$@"
-}
-
 if ! mysql_base -e "SELECT 1" >/dev/null 2>&1; then
-	echo "MySQL に接続できません (${ISUCON_DB_USER}@${ISUCON_DB_HOST}:${ISUCON_DB_PORT}/${ISUCON_DB_NAME})" >&2
+	if [[ "${ISUCON_DB_NET:-tcp}" == "unix" ]]; then
+		echo "MySQL に接続できません (${ISUCON_DB_USER}@socket:${ISUCON_DB_HOST}/${ISUCON_DB_NAME})" >&2
+	else
+		echo "MySQL に接続できません (${ISUCON_DB_USER}@${ISUCON_DB_HOST}:${ISUCON_DB_PORT}/${ISUCON_DB_NAME})" >&2
+	fi
 	exit 1
 fi
 

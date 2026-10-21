@@ -1,0 +1,6 @@
+# Optional drop-in for same-host app + MySQL (copy to /etc/mysql/mysql.conf.d/ on server).
+# Review innodb_buffer_pool_size against available RAM before applying.
+
+[mysqld]
+skip_name_resolve = 1
+max_connections = 500
