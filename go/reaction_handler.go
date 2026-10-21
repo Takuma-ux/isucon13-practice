@@ -190,51 +190,6 @@ func fillReactionsForLivestream(ctx context.Context, tx *sqlx.Tx, reactionModels
 	return reactions, nil
 }
 
-// fillReactionsResponse は、リアクション一覧の User と配信 Livestream を IN でまとめて埋める。
-func fillReactionsResponse(ctx context.Context, tx *sqlx.Tx, reactionModels []ReactionModel) ([]Reaction, error) {
-	if len(reactionModels) == 0 {
-		return []Reaction{}, nil
-	}
-
-	userIDs := make([]int64, 0, len(reactionModels))
-	livestreamIDs := make([]int64, 0, len(reactionModels))
-	for _, m := range reactionModels {
-		userIDs = append(userIDs, m.UserID)
-		livestreamIDs = append(livestreamIDs, m.LivestreamID)
-	}
-	userIDs = uniqueInt64(userIDs)
-
-	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	livestreamByID, err := livestreamsByIDs(ctx, tx, livestreamIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	reactions := make([]Reaction, len(reactionModels))
-	for i, m := range reactionModels {
-		user, ok := usersByID[m.UserID]
-		if !ok {
-			return nil, sql.ErrNoRows
-		}
-		livestream, ok := livestreamByID[m.LivestreamID]
-		if !ok {
-			return nil, fmt.Errorf("livestream not found: %d", m.LivestreamID)
-		}
-		reactions[i] = Reaction{
-			ID:         m.ID,
-			EmojiName:  m.EmojiName,
-			User:       user,
-			Livestream: livestream,
-			CreatedAt:  m.CreatedAt,
-		}
-	}
-	return reactions, nil
-}
-
 func fillReactionResponse(ctx context.Context, tx *sqlx.Tx, reactionModel ReactionModel) (Reaction, error) {
 	reactions, err := fillReactionsForLivestream(ctx, tx, []ReactionModel{reactionModel}, reactionModel.LivestreamID)
 	if err != nil {

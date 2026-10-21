@@ -523,61 +523,6 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 	return livecomments, nil
 }
 
-// fillLivecommentsResponse は、コメント一覧の投稿者 User と配信 Livestream を IN でまとめて埋める。
-// 1件だけ必要なときは fillLivecommentResponse がこの関数を1件スライスで呼ぶ。
-func fillLivecommentsResponse(ctx context.Context, tx *sqlx.Tx, livecommentModels []LivecommentModel) ([]Livecomment, error) {
-	if len(livecommentModels) == 0 {
-		return []Livecomment{}, nil
-	}
-
-	userIDs := make([]int64, 0, len(livecommentModels))
-	livestreamIDs := make([]int64, 0, len(livecommentModels))
-	for _, m := range livecommentModels {
-		userIDs = append(userIDs, m.UserID)
-		livestreamIDs = append(livestreamIDs, m.LivestreamID)
-	}
-	userIDs = uniqueInt64(userIDs)
-
-	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	livestreamByID, err := livestreamsByIDs(ctx, tx, livestreamIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	livecomments := make([]Livecomment, len(livecommentModels))
-	for i, m := range livecommentModels {
-		user, ok := usersByID[m.UserID]
-		if !ok {
-			return nil, sql.ErrNoRows
-		}
-		livestream, ok := livestreamByID[m.LivestreamID]
-		if !ok {
-			return nil, fmt.Errorf("livestream not found: %d", m.LivestreamID)
-		}
-		livecomments[i] = Livecomment{
-			ID:         m.ID,
-			User:       user,
-			Livestream: livestream,
-			Comment:    m.Comment,
-			Tip:        m.Tip,
-			CreatedAt:  m.CreatedAt,
-		}
-	}
-	return livecomments, nil
-}
-
-func fillLivecommentResponse(ctx context.Context, tx *sqlx.Tx, livecommentModel LivecommentModel) (Livecomment, error) {
-	livecomments, err := fillLivecommentsResponse(ctx, tx, []LivecommentModel{livecommentModel})
-	if err != nil {
-		return Livecomment{}, err
-	}
-	return livecomments[0], nil
-}
-
 // fillLivecommentResponseWithLivestream は POST コメント用。ハンドラが既に取得した livestream 行を
 // fillLivestreamsResponseWithOwners に渡し、livestreams の再 SELECT と owner 用の2回目 fillUsersByIDs を避ける。
 func fillLivecommentResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, livecommentModel LivecommentModel, livestreamModel LivestreamModel) (Livecomment, error) {
@@ -617,7 +562,7 @@ func fillLivecommentResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, liv
 
 // fillLivecommentReportsResponse は GET 通報一覧用。
 // 通報者・コメント投稿者・配信者の user ID をまとめて fillUsersByIDs し、
-// fillLivecommentsResponse 経由の2回目の users/themes/icons SELECT を避ける。
+// まとめ fill 経由の2回目の users/themes/icons SELECT を避ける。
 func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportModels []*LivecommentReportModel) ([]LivecommentReport, error) {
 	if len(reportModels) == 0 {
 		return []LivecommentReport{}, nil
