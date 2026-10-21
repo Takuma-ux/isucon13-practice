@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -317,8 +316,8 @@ func postIconHandler(c echo.Context) error {
 	userID := sess.Values[defaultUserIDKey].(int64)
 
 	var req *PostIconRequest
-	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "failed to decode the request body as json")
+	if err := decodeRequestBody(c, &req); err != nil {
+		return err
 	}
 
 	iconID, err := withMySQLDeadlockRetryInt64(func() (int64, error) {
@@ -425,8 +424,8 @@ func registerHandler(c echo.Context) error {
 	defer c.Request().Body.Close()
 
 	req := PostUserRequest{}
-	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "failed to decode the request body as json")
+	if err := decodeRequestBody(c, &req); err != nil {
+		return err
 	}
 
 	if req.Name == "pipe" {
@@ -495,8 +494,8 @@ func loginHandler(c echo.Context) error {
 	defer c.Request().Body.Close()
 
 	req := LoginRequest{}
-	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "failed to decode the request body as json")
+	if err := decodeRequestBody(c, &req); err != nil {
+		return err
 	}
 
 	tx, err := dbConn.BeginTxx(ctx, nil)

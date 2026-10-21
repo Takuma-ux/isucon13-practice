@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -166,8 +165,8 @@ func postLivecommentHandler(c echo.Context) error {
 	userID := sess.Values[defaultUserIDKey].(int64)
 
 	var req *PostLivecommentRequest
-	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "failed to decode the request body as json")
+	if err := decodeRequestBody(c, &req); err != nil {
+		return err
 	}
 
 	tx, err := dbConn.BeginTxx(ctx, nil)
@@ -412,8 +411,8 @@ func moderateHandler(c echo.Context) error {
 	userID := sess.Values[defaultUserIDKey].(int64)
 
 	var req *ModerateRequest
-	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "failed to decode the request body as json")
+	if err := decodeRequestBody(c, &req); err != nil {
+		return err
 	}
 
 	var wordID int64
