@@ -1,14 +1,42 @@
 #!/usr/bin/env bash
 # Install repo-maintained infra tuning on an ISUCON13 app host (run with sudo or as root).
 #
-# Run ONLY on the competition EC2 instance — not on a dev laptop. MySQL buffer pool
-# sizing uses this host's RAM (see apply-mysql-tuning.sh); wrong-host runs are dangerous.
-# Example: sudo CONFIRM_MYSQL_TUNING=yes ./provisioning/apply.sh
+# Run ONLY on the competition EC2 instance — not on a dev laptop.
+#
+# Safety: without confirmation, this script does NOT write /etc, reload services, or
+# change running units. Preview: INFRA_DRY_RUN=1 sudo ./provisioning/apply.sh
+#
+# Activate on target server:
+#   sudo CONFIRM_INFRA_APPLY=yes CONFIRM_MYSQL_TUNING=yes ./provisioning/apply.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+if [[ "${INFRA_DRY_RUN:-}" == "1" ]]; then
+	infra_dry_run() {
+	echo "[dry-run] Would install $ROOT/provisioning/sysctl/99-isucon.conf -> /etc/sysctl.d/"
+	echo "[dry-run] Would install isupipe-go.service.d/limits.conf"
+	echo "[dry-run] Would run sysctl --system"
+	echo "[dry-run] Would systemctl daemon-reload"
+	echo "[dry-run] Would disable apt/unattended-upgrades and noise timers"
+	echo "[dry-run] Would run apply_mysql_tuning (needs CONFIRM_MYSQL_TUNING=yes)"
+	echo "[dry-run] Nginx: merge files under provisioning/nginx/ manually; reload only with CONFIRM_NGINX_RELOAD=yes"
+	}
+	infra_dry_run
+	# shellcheck disable=SC1091
+	source "$(dirname "$0")/apply-mysql-tuning.sh"
+	MYSQL_TUNING_DRY_RUN=1 apply_mysql_tuning
+	exit 0
+fi
+
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-	echo "Run as root: sudo $0" >&2
+	echo "Run as root: sudo CONFIRM_INFRA_APPLY=yes $0" >&2
+	exit 1
+fi
+
+if [[ "${CONFIRM_INFRA_APPLY:-}" != "yes" ]]; then
+	echo "Aborted: no changes made." >&2
+	echo "Set CONFIRM_INFRA_APPLY=yes on the competition EC2 host to install and activate." >&2
+	echo "Preview: INFRA_DRY_RUN=1 sudo $0" >&2
 	exit 1
 fi
 
@@ -67,5 +95,5 @@ apply_mysql_tuning
 
 echo "=== Done ==="
 echo "Applied: sysctl, isupipe-go limits, apt/unattended-upgrades off, optional timers off, MySQL drop-in"
-echo "Optional: merge provisioning/env.sh.example into /home/isucon/env.sh and restart isupipe-go"
-echo "Optional: nginx — merge provisioning/nginx/isupipe.conf into /etc/nginx/sites-enabled/ then nginx -t && systemctl reload nginx"
+echo "Optional: merge provisioning/env.sh.example into /home/isucon/env.sh and restart isupipe-go (manual)"
+echo "Optional: nginx — see provisioning/README.md; reload only with CONFIRM_NGINX_RELOAD=yes"
