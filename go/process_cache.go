@@ -59,6 +59,18 @@ func invalidateUserProfileCache(userID int64) {
 	userProfileCacheMu.Unlock()
 }
 
+// writeThroughUserProfileCache bumps epoch (defeating in-flight stale fills) and stores the authoritative profile.
+func writeThroughUserProfileCache(user *User) {
+	if user == nil {
+		return
+	}
+	stored := cloneUser(user)
+	userProfileCacheMu.Lock()
+	userProfileCacheEpoch[user.ID]++
+	userProfileCache[user.ID] = stored
+	userProfileCacheMu.Unlock()
+}
+
 func getLivestreamShellFromProcessCache(livestreamID int64) (*LivestreamShell, bool) {
 	livestreamShellCacheMu.RLock()
 	shell, ok := livestreamShellCache[livestreamID]

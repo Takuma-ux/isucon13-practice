@@ -456,7 +456,7 @@ func TestProcessCacheStalePutAfterInvalidateRace(t *testing.T) {
 	if newHash == oldHash {
 		t.Fatal("new icon hash must differ from old")
 	}
-	// postUserIcon already called invalidateUserProfileCache.
+	// postUserIcon write-through refreshes cache with new hash (epoch bumped).
 
 	close(releasePut)
 	select {
@@ -497,7 +497,87 @@ func TestProcessCacheStalePutAfterInvalidateRace(t *testing.T) {
 	if cached.IconHash != newHash {
 		t.Fatalf("cached icon_hash %q want %q", cached.IconHash, newHash)
 	}
-	t.Log("epoch-guarded putUserProfileCache dropped stale write after invalidate; fresh hash served")
+	t.Log("epoch-guarded putUserProfileCache dropped stale write after write-through; fresh hash served")
+}
+
+// TestProcessCacheStalePutAfterWriteThroughRace: stale fill put must lose to writeThroughUserProfileCache (epoch bump + fresh put).
+func TestProcessCacheStalePutAfterWriteThroughRace(t *testing.T) {
+	invalidateProcessReadCaches()
+	const userID = 1
+
+	oldHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	newHash := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	fillEpoch := snapshotUserProfileCacheEpoch(userID)
+
+	staleUser := User{ID: userID, Name: "test001", IconHash: oldHash}
+	freshUser := User{ID: userID, Name: "test001", IconHash: newHash}
+
+	atPut := make(chan struct{})
+	releasePut := make(chan struct{})
+	fillDone := make(chan struct{})
+
+	userProfileCachePutDelayHook = func(uid int64) {
+		if uid != userID {
+			return
+		}
+		close(atPut)
+		<-releasePut
+	}
+	defer func() { userProfileCachePutDelayHook = nil }()
+
+	go func() {
+		putUserProfileCacheWithEpoch(&staleUser, fillEpoch)
+		close(fillDone)
+	}()
+
+	select {
+	case <-atPut:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for delayed stale put")
+	}
+
+	writeThroughUserProfileCache(&freshUser)
+
+	close(releasePut)
+	select {
+	case <-fillDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stale put goroutine")
+	}
+
+	cached, ok := getUserProfileFromProcessCache(userID)
+	if !ok {
+		t.Fatal("expected immediate cache hit after write-through")
+	}
+	if cached.IconHash != newHash {
+		t.Fatalf("write-through poisoned by stale put: got %q want %q", cached.IconHash, newHash)
+	}
+	if cached.IconHash == oldHash {
+		t.Fatalf("RACE CONFIRMED: stale icon_hash won over write-through")
+	}
+	t.Log("stale delayed put dropped; write-through value retained in cache")
+}
+
+// TestProcessCacheIconWriteThroughPopulatesCache verifies postUserIcon leaves a cache hit (not a cold miss).
+func TestProcessCacheIconWriteThroughPopulatesCache(t *testing.T) {
+	db := processCacheTestDB(t)
+	dbConn = db
+	ctx := context.Background()
+	const userID = 1
+	invalidateProcessReadCaches()
+
+	image := []byte(fmt.Sprintf("write-through-icon-%d", time.Now().UnixNano()))
+	wantHash := hashIconBytes(image)
+	if _, err := postUserIcon(ctx, userID, image); err != nil {
+		t.Fatalf("post icon: %v", err)
+	}
+	cached, ok := getUserProfileFromProcessCache(userID)
+	if !ok {
+		t.Fatal("expected cache populated after icon upload write-through")
+	}
+	if cached.IconHash != wantHash {
+		t.Fatalf("cache icon_hash %q want %q", cached.IconHash, wantHash)
+	}
 }
 
 // TestProcessCacheUnguardedPutWouldPoisonCache documents the pre-epoch failure mode (not production code path).

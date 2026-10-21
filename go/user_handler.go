@@ -372,8 +372,58 @@ func postUserIcon(ctx context.Context, userID int64, image []byte) (int64, error
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("failed to commit: %w", err)
 	}
-	invalidateUserProfileCache(userID)
+	if err := writeThroughUserProfileCacheFromDB(ctx, userID); err != nil {
+		return iconID, fmt.Errorf("refresh user profile cache: %w", err)
+	}
 	return iconID, nil
+}
+
+func loadUserProfileFromDB(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (User, error) {
+	themeModel := ThemeModel{}
+	if err := tx.GetContext(ctx, &themeModel, "SELECT * FROM themes WHERE user_id = ?", userModel.ID); err != nil {
+		return User{}, err
+	}
+
+	iconHash := defaultIconHash
+	if err := tx.GetContext(ctx, &iconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", userModel.ID); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return User{}, err
+		}
+	}
+
+	return User{
+		ID:          userModel.ID,
+		Name:        userModel.Name,
+		DisplayName: userModel.DisplayName,
+		Description: userModel.Description,
+		Theme: Theme{
+			ID:       themeModel.ID,
+			DarkMode: themeModel.DarkMode,
+		},
+		IconHash: iconHash,
+	}, nil
+}
+
+func writeThroughUserProfileCacheFromDB(ctx context.Context, userID int64) error {
+	readTx, err := dbConn.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin read tx: %w", err)
+	}
+	defer readTx.Rollback()
+
+	var userModel UserModel
+	if err := readTx.GetContext(ctx, &userModel, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+	user, err := loadUserProfileFromDB(ctx, readTx, userModel)
+	if err != nil {
+		return err
+	}
+	if err := readTx.Commit(); err != nil {
+		return fmt.Errorf("commit read tx: %w", err)
+	}
+	writeThroughUserProfileCache(&user)
+	return nil
 }
 
 func getMeHandler(c echo.Context) error {
@@ -669,28 +719,9 @@ func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (Us
 
 	fillEpoch := snapshotUserProfileCacheEpoch(userModel.ID)
 
-	themeModel := ThemeModel{}
-	if err := tx.GetContext(ctx, &themeModel, "SELECT * FROM themes WHERE user_id = ?", userModel.ID); err != nil {
+	user, err := loadUserProfileFromDB(ctx, tx, userModel)
+	if err != nil {
 		return User{}, err
-	}
-
-	iconHash := defaultIconHash
-	if err := tx.GetContext(ctx, &iconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", userModel.ID); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return User{}, err
-		}
-	}
-
-	user := User{
-		ID:          userModel.ID,
-		Name:        userModel.Name,
-		DisplayName: userModel.DisplayName,
-		Description: userModel.Description,
-		Theme: Theme{
-			ID:       themeModel.ID,
-			DarkMode: themeModel.DarkMode,
-		},
-		IconHash: iconHash,
 	}
 
 	putUserProfileCache(&user, fillEpoch)
