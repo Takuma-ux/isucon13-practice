@@ -74,6 +74,10 @@ func connectDB(logger echo.Logger) (*sqlx.DB, error) {
 	conf.DBName = "isupipe"
 	conf.ParseTime = true
 	conf.InterpolateParams = true
+	// Bounded I/O so a stalled MySQL cannot hold a handler goroutine forever (unix socket included).
+	conf.Timeout = 5 * time.Second
+	conf.ReadTimeout = 30 * time.Second
+	conf.WriteTimeout = 30 * time.Second
 
 	if v, ok := os.LookupEnv(networkTypeEnvKey); ok {
 		conf.Net = v

@@ -42,6 +42,7 @@ sudo CONFIRM_NGINX_RELOAD=yes systemctl reload nginx
 
 - `innodb_buffer_pool_size` (from MemTotal, 45% policy)
 - `innodb_flush_log_at_trx_commit = 2`
+- `innodb_lock_wait_timeout = 10` (default 50s)
 - `performance_schema = OFF`
 - `table_open_cache = 4096`, `thread_cache_size = 64`
 - `log_bin = OFF`, `general_log = OFF` (single-node; avoids binlog DML overhead and accidental full query logging)

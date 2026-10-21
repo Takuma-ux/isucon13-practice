@@ -77,6 +77,8 @@ skip_name_resolve = 1
 max_connections = 500
 innodb_buffer_pool_size = ${pool_mb}M
 innodb_flush_log_at_trx_commit = 2
+# Default 50s; lock waits (not deadlocks) should fail fast under bench contention (~100ms+ observed legitimately).
+innodb_lock_wait_timeout = 10
 performance_schema = OFF
 table_open_cache = 4096
 thread_cache_size = 64
