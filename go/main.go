@@ -4,6 +4,7 @@ package main
 // sqlx的な参考: https://jmoiron.github.io/sqlx/
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -134,6 +135,9 @@ func initializeHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to initialize: "+err.Error())
 	}
 	invalidateTagsCache()
+	if err := warmTagsCache(c.Request().Context()); err != nil {
+		c.Logger().Warnf("tags cache prewarm after initialize failed: %v", err)
+	}
 
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 	return c.JSON(http.StatusOK, InitializeResponse{
@@ -155,13 +159,15 @@ func main() {
 	if os.Getenv("ISUCON13_ACCESS_LOG") == "1" {
 		e.Use(middleware.Logger())
 	}
-	if os.Getenv("ISUCON13_GZIP") == "1" {
-		e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
-			Skipper: func(c echo.Context) bool {
-				// JPEG is already compressed; skipping saves CPU on a hot asset path.
-				return strings.HasPrefix(c.Path(), "/api/user/") && strings.HasSuffix(c.Path(), "/icon")
-			},
-		}))
+	gzipSkipIcon := func(c echo.Context) bool {
+		// JPEG is already compressed; skipping saves CPU on a hot asset path.
+		return strings.HasPrefix(c.Path(), "/api/user/") && strings.HasSuffix(c.Path(), "/icon")
+	}
+	switch os.Getenv("ISUCON13_GZIP") {
+	case "1":
+		e.Use(middleware.GzipWithConfig(middleware.GzipConfig{Skipper: gzipSkipIcon}))
+	case "klauspost":
+		e.Use(klauspostGzipMiddleware(klauspostGzipConfig{Skipper: gzipSkipIcon}))
 	}
 	cookieStore := sessions.NewCookieStore(secret)
 	cookieStore.Options.Domain = "*.u.isucon.local"
@@ -231,6 +237,12 @@ func main() {
 	}
 	defer conn.Close()
 	dbConn = conn
+
+	if err := warmTagsCache(context.Background()); err != nil {
+		e.Logger.Warnf("tags cache prewarm failed (first /api/tag will retry): %v", err)
+	} else {
+		e.Logger.Infof("tags cache prewarmed (%d tags)", len(tagsCache.Tags))
+	}
 
 	subdomainAddr, ok := os.LookupEnv(powerDNSSubdomainAddressEnvKey)
 	if !ok {

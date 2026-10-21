@@ -36,6 +36,12 @@ func invalidateTagsCache() {
 	tagsCacheMu.Unlock()
 }
 
+// warmTagsCache loads GET /api/tag data once (e.g. at process start).
+func warmTagsCache(ctx context.Context) error {
+	_, err := getCachedTags(ctx)
+	return err
+}
+
 func loadTagsFromDB(ctx context.Context) (*TagsResponse, error) {
 	var tagModels []*TagModel
 	if err := dbConn.SelectContext(ctx, &tagModels, "SELECT * FROM tags"); err != nil {
