@@ -602,15 +602,12 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	livestreamIDs = uniqueInt64(livestreamIDs)
 
 	livestreamRowModels, missLivestreamIDs := livestreamModelsFromProcessCache(livestreamIDs)
-	if len(missLivestreamIDs) > 0 {
-		fetched := make([]LivestreamModel, 0, len(missLivestreamIDs))
-		if err := selectIn(ctx, tx, &fetched, "SELECT * FROM livestreams WHERE id IN (?)", missLivestreamIDs); err != nil {
+	for _, id := range missLivestreamIDs {
+		model, err := coalescedLoadLivestreamRow(ctx, tx, id)
+		if err != nil {
 			return nil, err
 		}
-		for i := range fetched {
-			putLivestreamRowCache(&fetched[i])
-			livestreamRowModels = append(livestreamRowModels, fetched[i])
-		}
+		livestreamRowModels = append(livestreamRowModels, model)
 	}
 	livestreamModelByID := make(map[int64]LivestreamModel, len(livestreamRowModels))
 	for _, ls := range livestreamRowModels {

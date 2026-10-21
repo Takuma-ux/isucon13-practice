@@ -662,18 +662,12 @@ func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (
 		}
 		missIDs = append(missIDs, id)
 	}
-	if len(missIDs) > 0 {
-		fetched := make([]LivestreamModel, 0, len(missIDs))
-		if err := selectIn(ctx, tx, &fetched, "SELECT * FROM livestreams WHERE id IN (?)", missIDs); err != nil {
+	for _, id := range missIDs {
+		model, err := coalescedLoadLivestreamRow(ctx, tx, id)
+		if err != nil {
 			return nil, err
 		}
-		if len(fetched) != len(missIDs) {
-			return nil, sql.ErrNoRows
-		}
-		for i := range fetched {
-			putLivestreamRowCache(&fetched[i])
-			livestreamRowModels = append(livestreamRowModels, fetched[i])
-		}
+		livestreamRowModels = append(livestreamRowModels, model)
 	}
 	if len(livestreamRowModels) == 0 {
 		return livestreamByID, nil
@@ -726,67 +720,14 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 		return users, nil
 	}
 
-	fillEpoch := make(map[int64]uint64, len(missIDs))
 	for _, id := range missIDs {
-		fillEpoch[id] = snapshotUserProfileCacheEpoch(id)
-	}
-
-	// 旧: 配信ごとに SELECT * FROM users WHERE id = ?
-	// 今: 集めた user ID を IN に渡し、owner 行を1回で取る（password は JSON に出さないので読まない）。
-	userModels := make([]userFillModel, 0, len(missIDs))
-	if err := selectIn(ctx, tx, &userModels, "SELECT id, name, display_name, description FROM users WHERE id IN (?)", missIDs); err != nil {
-		return nil, err
-	}
-	// 旧 GetContext は行が無いと sql.ErrNoRows。IN は欠落をエラーにしないので、件数で同じ失敗にする。
-	if len(userModels) != len(missIDs) {
-		return nil, sql.ErrNoRows
-	}
-
-	// 旧 fillUserResponse の SELECT * FROM themes WHERE user_id = ? を、user ID の IN 1回にする。
-	themeModels := make([]themeFillModel, 0, len(missIDs))
-	if err := selectIn(ctx, tx, &themeModels, "SELECT id, user_id, dark_mode FROM themes WHERE user_id IN (?)", missIDs); err != nil {
-		return nil, err
-	}
-	// 後のループが user ID で引けるようにする。SQL は出さない。
-	themeByUserID := make(map[int64]themeFillModel, len(themeModels))
-	for _, themeModel := range themeModels {
-		themeByUserID[themeModel.UserID] = themeModel
-	}
-
-	// 旧 fillUserResponse の SELECT icon_hash FROM icons WHERE user_id = ? を、user ID の IN 1回にする。
-	iconModels := make([]iconHashModel, 0, len(missIDs))
-	if err := selectIn(ctx, tx, &iconModels, "SELECT user_id, icon_hash FROM icons WHERE user_id IN (?)", missIDs); err != nil {
-		return nil, err
-	}
-	iconHashByUserID := make(map[int64]string, len(iconModels))
-	for _, iconModel := range iconModels {
-		iconHashByUserID[iconModel.UserID] = iconModel.IconHash
-	}
-
-	// 旧 fillUserResponse と同じ組み立て。theme と icon_hash は上の map から取り、ここでは SQL を出さない。
-	for _, userModel := range userModels {
-		themeModel, ok := themeByUserID[userModel.ID]
-		if !ok {
-			return nil, sql.ErrNoRows
+		user, err := coalescedLoadUserProfile(ctx, tx, id)
+		if err != nil {
+			return nil, err
 		}
-		iconHash, ok := iconHashByUserID[userModel.ID]
-		if !ok {
-			iconHash = defaultIconHash
-		}
-		user := User{
-			ID:          userModel.ID,
-			Name:        userModel.Name,
-			DisplayName: userModel.DisplayName,
-			Description: userModel.Description,
-			Theme: Theme{
-				ID:       themeModel.ID,
-				DarkMode: themeModel.DarkMode,
-			},
-			IconHash: iconHash,
-		}
-		putUserProfileCache(&user, fillEpoch[userModel.ID])
-		cacheUser(ctx, userModel.ID, &user)
-		users[userModel.ID] = &user
+		u := cloneUser(&user)
+		cacheUser(ctx, id, u)
+		users[id] = u
 	}
 	return users, nil
 }

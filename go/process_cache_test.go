@@ -645,6 +645,135 @@ func TestProcessCacheLivestreamRowRepeatGET(t *testing.T) {
 	}
 }
 
+// TestProcessCacheLivestreamSingleflightDedup ensures concurrent cold misses coalesce to ~one row SELECT.
+func TestProcessCacheLivestreamSingleflightDedup(t *testing.T) {
+	db := processCacheTestDB(t)
+	dbConn = db
+	ctx := context.Background()
+	invalidateProcessReadCaches()
+
+	var lsID int64
+	if err := db.GetContext(ctx, &lsID, "SELECT id FROM livestreams ORDER BY id LIMIT 1"); err != nil {
+		t.Fatalf("livestream id: %v", err)
+	}
+
+	const workers = 32
+	processCacheTestLivestreamRowDBLoads.Store(0)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tx, err := db.BeginTxx(ctx, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer tx.Rollback()
+			_, err = getLivestreamModelByID(ctx, tx, lsID)
+			if err != nil {
+				errCh <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+
+	loads := processCacheTestLivestreamRowDBLoads.Load()
+	t.Logf("concurrent cold getLivestreamModelByID x%d: coalesced DB row loads=%d (want ~1)", workers, loads)
+	if loads > 2 {
+		t.Fatalf("expected ~1 coalesced livestream row SELECT, got %d", loads)
+	}
+}
+
+// TestProcessCacheSingleflightEpochDuringCoalescedUserLoad: write-through during coalesced fetch must win over stale put.
+func TestProcessCacheSingleflightEpochDuringCoalescedUserLoad(t *testing.T) {
+	db := processCacheTestDB(t)
+	dbConn = db
+	ctx := context.Background()
+	const userID = 1
+	invalidateProcessReadCaches()
+
+	oldImage := []byte(fmt.Sprintf("sf-old-%d", time.Now().UnixNano()))
+	oldHash := hashIconBytes(oldImage)
+	if _, err := postUserIcon(ctx, userID, oldImage); err != nil {
+		t.Fatalf("seed icon: %v", err)
+	}
+	invalidateProcessReadCaches() // cold cache; DB still has old icon until write-through below
+
+	newHash := hashIconBytes([]byte("sf-new-icon-fixed-payload"))
+	freshUser := User{ID: userID, Name: "test001", IconHash: newHash}
+
+	atDelay := make(chan struct{})
+	releaseDelay := make(chan struct{})
+	userProfileCoalescedFetchDelayHook = func(uid int64) {
+		if uid != userID {
+			return
+		}
+		close(atDelay)
+		<-releaseDelay
+	}
+	defer func() { userProfileCoalescedFetchDelayHook = nil }()
+
+	const workers = 12
+	var wg sync.WaitGroup
+	results := make([]User, workers)
+	errCh := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			tx, err := db.BeginTxx(ctx, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer tx.Rollback()
+			u, err := coalescedLoadUserProfile(ctx, tx, userID)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			results[idx] = u
+		}(i)
+	}
+
+	select {
+	case <-atDelay:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for coalesced fetch delay hook")
+	}
+
+	writeThroughUserProfileCache(&freshUser)
+	close(releaseDelay)
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+
+	for i, u := range results {
+		if u.IconHash == oldHash {
+			t.Fatalf("worker %d got stale coalesced icon_hash %q after write-through", i, oldHash)
+		}
+		if u.IconHash != newHash {
+			t.Fatalf("worker %d icon_hash %q want %q", i, u.IconHash, newHash)
+		}
+	}
+	cached, ok := getUserProfileFromProcessCache(userID)
+	if !ok || cached.IconHash != newHash {
+		t.Fatalf("cache after coalesced race: ok=%v hash=%v", ok, cached)
+	}
+	t.Log("singleflight coalesced load returned write-through profile after stale put was epoch-rejected")
+}
+
 func TestProcessCacheMutexSmoke(t *testing.T) {
 	invalidateProcessReadCaches()
 	var wg sync.WaitGroup

@@ -717,14 +717,10 @@ func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (Us
 		return *profile, nil
 	}
 
-	fillEpoch := snapshotUserProfileCacheEpoch(userModel.ID)
-
-	user, err := loadUserProfileFromDB(ctx, tx, userModel)
+	user, err := coalescedLoadUserProfile(ctx, tx, userModel.ID)
 	if err != nil {
 		return User{}, err
 	}
-
-	putUserProfileCache(&user, fillEpoch)
-	cacheUser(ctx, userModel.ID, &user)
+	cacheUser(ctx, userModel.ID, cloneUser(&user))
 	return user, nil
 }
