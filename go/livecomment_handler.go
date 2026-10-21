@@ -30,9 +30,9 @@ type LivecommentModel struct {
 }
 
 type Livecomment struct {
-	ID         int64      `json:"id"`
-	User       User       `json:"user"`
-	Livestream Livestream `json:"livestream"`
+	ID         int64       `json:"id"`
+	User       *User       `json:"user"`
+	Livestream *Livestream `json:"livestream"`
 	Comment    string     `json:"comment"`
 	Tip        int64      `json:"tip"`
 	CreatedAt  int64      `json:"created_at"`
@@ -40,7 +40,7 @@ type Livecomment struct {
 
 type LivecommentReport struct {
 	ID          int64       `json:"id"`
-	Reporter    User        `json:"reporter"`
+	Reporter    *User       `json:"reporter"`
 	Livecomment Livecomment `json:"livecomment"`
 	CreatedAt   int64       `json:"created_at"`
 }
@@ -462,9 +462,9 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 		return []Livecomment{}, nil
 	}
 
-	var livestream Livestream
+	var livestreamPtr *Livestream
 	if cached, ok := getLivestreamFromCache(ctx, livestreamID); ok {
-		livestream = *cached
+		livestreamPtr = cached
 	} else {
 		var livestreamModel LivestreamModel
 		if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {
@@ -490,7 +490,10 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 		if len(livestreams) != 1 {
 			return nil, sql.ErrNoRows
 		}
-		livestream = livestreams[0]
+		livestreamPtr, ok = getLivestreamFromCache(ctx, livestreamID)
+		if !ok {
+			livestreamPtr = &livestreams[0]
+		}
 	}
 
 	userIDs := make([]int64, 0, len(livecommentModels))
@@ -513,7 +516,7 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 		livecomments[i] = Livecomment{
 			ID:         m.ID,
 			User:       user,
-			Livestream: livestream,
+			Livestream: livestreamPtr,
 			Comment:    m.Comment,
 			Tip:        m.Tip,
 			CreatedAt:  m.CreatedAt,
@@ -542,7 +545,10 @@ func fillLivecommentResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, liv
 	if len(livestreams) != 1 {
 		return Livecomment{}, sql.ErrNoRows
 	}
-	livestream := livestreams[0]
+	livestreamPtr, ok := getLivestreamFromCache(ctx, livestreamModel.ID)
+	if !ok {
+		livestreamPtr = &livestreams[0]
+	}
 
 	user, ok := usersByID[livecommentModel.UserID]
 	if !ok {
@@ -552,7 +558,7 @@ func fillLivecommentResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, liv
 	return Livecomment{
 		ID:         livecommentModel.ID,
 		User:       user,
-		Livestream: livestream,
+		Livestream: livestreamPtr,
 		Comment:    livecommentModel.Comment,
 		Tip:        livecommentModel.Tip,
 		CreatedAt:  livecommentModel.CreatedAt,
@@ -634,8 +640,9 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	if err != nil {
 		return nil, err
 	}
-	livestreamByID := make(map[int64]Livestream, len(livestreams))
-	for _, ls := range livestreams {
+	livestreamByID := make(map[int64]*Livestream, len(livestreams))
+	for i := range livestreams {
+		ls := &livestreams[i]
 		livestreamByID[ls.ID] = ls
 	}
 
@@ -709,13 +716,18 @@ func fillLivecommentReportResponseWithLivestream(ctx context.Context, tx *sqlx.T
 		return LivecommentReport{}, sql.ErrNoRows
 	}
 
+	livestreamPtr, ok := getLivestreamFromCache(ctx, livestreamModel.ID)
+	if !ok {
+		livestreamPtr = &livestreams[0]
+	}
+
 	return LivecommentReport{
 		ID:          reportModel.ID,
 		Reporter:    reporter,
 		Livecomment: Livecomment{
 			ID:         livecommentModel.ID,
 			User:       user,
-			Livestream: livestreams[0],
+			Livestream: livestreamPtr,
 			Comment:    livecommentModel.Comment,
 			Tip:        livecommentModel.Tip,
 			CreatedAt:  livecommentModel.CreatedAt,

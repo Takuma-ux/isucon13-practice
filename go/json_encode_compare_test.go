@@ -188,12 +188,12 @@ func TestJSONEncodingSynthetic(t *testing.T) {
 		IconHash: "d9f8294e9d895f81ce62e73dc7d5dff862a4fa40bd4e0fecf53f7526a8edcac0",
 	}
 	ls := Livestream{
-		ID: 999, Owner: user, Title: "映画レビュー", Tags: []Tag{{ID: 1, Name: "サプライズ"}},
+		ID: 999, Owner: &user, Title: "映画レビュー", Tags: []Tag{{ID: 1, Name: "サプライズ"}},
 		Description: "desc", PlaylistUrl: "https://example.com/p.m3u8", ThumbnailUrl: "https://example.com/t.webp",
 		StartAt: 1691917200, EndAt: 1691920800,
 	}
 	lc := Livecomment{
-		ID: 1, User: user, Livestream: ls,
+		ID: 1, User: &user, Livestream: &ls,
 		Comment: "あっちの人 🎉 コメント", Tip: 100, CreatedAt: 1691917300,
 	}
 	compareJSONEncodings(t, "synthetic_User", user)

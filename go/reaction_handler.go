@@ -22,10 +22,10 @@ type ReactionModel struct {
 }
 
 type Reaction struct {
-	ID         int64      `json:"id"`
-	EmojiName  string     `json:"emoji_name"`
-	User       User       `json:"user"`
-	Livestream Livestream `json:"livestream"`
+	ID         int64       `json:"id"`
+	EmojiName  string      `json:"emoji_name"`
+	User       *User       `json:"user"`
+	Livestream *Livestream `json:"livestream"`
 	CreatedAt  int64      `json:"created_at"`
 }
 
@@ -170,7 +170,10 @@ func fillReactionsForLivestream(ctx context.Context, tx *sqlx.Tx, reactionModels
 	if len(livestreams) != 1 {
 		return nil, sql.ErrNoRows
 	}
-	livestream := livestreams[0]
+	livestreamPtr, ok := getLivestreamFromCache(ctx, livestreamID)
+	if !ok {
+		livestreamPtr = &livestreams[0]
+	}
 
 	reactions := make([]Reaction, len(reactionModels))
 	for i, m := range reactionModels {
@@ -182,7 +185,7 @@ func fillReactionsForLivestream(ctx context.Context, tx *sqlx.Tx, reactionModels
 			ID:         m.ID,
 			EmojiName:  m.EmojiName,
 			User:       user,
-			Livestream: livestream,
+			Livestream: livestreamPtr,
 			CreatedAt:  m.CreatedAt,
 		}
 	}

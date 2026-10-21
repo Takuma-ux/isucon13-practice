@@ -45,7 +45,7 @@ type LivestreamModel struct {
 
 type Livestream struct {
 	ID           int64  `json:"id"`
-	Owner        User   `json:"owner"`
+	Owner        *User  `json:"owner"`
 	Title        string `json:"title"`
 	Description  string `json:"description"`
 	PlaylistUrl  string `json:"playlist_url"`
@@ -573,7 +573,7 @@ func fillLivestreamsResponse(ctx context.Context, tx *sqlx.Tx, livestreamModels 
 
 // fillLivestreamsResponseWithOwners は owner 用 User を既に取っているときの fillLivestreamsResponse 本体。
 // owners は配信 owner の user ID をキーに含むこと。fillUsersByIDs は呼ばない。
-func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestreamModels []*LivestreamModel, livestreamIDs []int64, owners map[int64]User) ([]Livestream, error) {
+func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestreamModels []*LivestreamModel, livestreamIDs []int64, owners map[int64]*User) ([]Livestream, error) {
 	livestreams := make([]Livestream, len(livestreamModels))
 	if len(livestreamModels) == 0 {
 		return livestreams, nil
@@ -680,10 +680,10 @@ func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (
 //   - userIDs: owner の user ID。重複は呼び出し側で除いてある。0件なら SQL を出さない
 //
 // @return
-//   - map[int64]User: user ID から API 用 User。失敗時は nil
+//   - map[int64]*User: user ID から API 用 User。失敗時は nil
 //   - error: user または theme が欠けているとき、または SELECT に失敗したとき
-func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int64]User, error) {
-	users := make(map[int64]User, len(userIDs))
+func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int64]*User, error) {
+	users := make(map[int64]*User, len(userIDs))
 	if len(userIDs) == 0 {
 		return users, nil
 	}
@@ -691,7 +691,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 	missIDs := make([]int64, 0, len(userIDs))
 	for _, id := range userIDs {
 		if cached, ok := getUserFromCache(ctx, id); ok {
-			users[id] = *cached
+			users[id] = cached
 			continue
 		}
 		missIDs = append(missIDs, id)
@@ -753,8 +753,8 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 			},
 			IconHash: iconHash,
 		}
-		users[userModel.ID] = user
 		cacheUser(ctx, userModel.ID, &user)
+		users[userModel.ID] = &user
 	}
 	return users, nil
 }
