@@ -58,7 +58,7 @@ func lookupTagIDsByName(ctx context.Context, name string) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	var ids []int
+	ids := make([]int, 0, len(tagsResponse.Tags))
 	for _, tag := range tagsResponse.Tags {
 		if tag.Name == name {
 			ids = append(ids, int(tag.ID))

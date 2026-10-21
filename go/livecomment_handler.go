@@ -576,7 +576,7 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	reporterIDs = uniqueInt64(reporterIDs)
 	livecommentIDs = uniqueInt64(livecommentIDs)
 
-	var livecommentRowModels []LivecommentModel
+	livecommentRowModels := make([]LivecommentModel, 0, len(livecommentIDs))
 	if err := selectIn(ctx, tx, &livecommentRowModels, "SELECT * FROM livecomments WHERE id IN (?)", livecommentIDs); err != nil {
 		return nil, err
 	}
@@ -591,7 +591,7 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	}
 	livestreamIDs = uniqueInt64(livestreamIDs)
 
-	var livestreamRowModels []LivestreamModel
+	livestreamRowModels := make([]LivestreamModel, 0, len(livestreamIDs))
 	if err := selectIn(ctx, tx, &livestreamRowModels, "SELECT * FROM livestreams WHERE id IN (?)", livestreamIDs); err != nil {
 		return nil, err
 	}

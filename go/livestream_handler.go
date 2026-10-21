@@ -219,7 +219,7 @@ func searchLivestreamsHandler(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to construct IN query: "+err.Error())
 		}
-		var keyTaggedLivestreams []*LivestreamTagModel
+		keyTaggedLivestreams := make([]*LivestreamTagModel, 0, len(tagIDList))
 		if err := tx.SelectContext(ctx, &keyTaggedLivestreams, query, params...); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get keyTaggedLivestreams: "+err.Error())
 		}
@@ -632,7 +632,7 @@ func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestr
 // livestreamsByIDs は livestream ID の IN 取得と fillLivestreamsResponse を1回にまとめ、ID から引ける map を返す。
 // livestreamIDs に重複があっても uniqueInt64 する。
 func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (map[int64]Livestream, error) {
-	livestreamByID := make(map[int64]Livestream)
+	livestreamByID := make(map[int64]Livestream, len(livestreamIDs))
 	if len(livestreamIDs) == 0 {
 		return livestreamByID, nil
 	}
@@ -650,7 +650,7 @@ func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (
 		return livestreamByID, nil
 	}
 
-	var livestreamRowModels []LivestreamModel
+	livestreamRowModels := make([]LivestreamModel, 0, len(missIDs))
 	if err := selectIn(ctx, tx, &livestreamRowModels, "SELECT * FROM livestreams WHERE id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
@@ -702,7 +702,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 
 	// 旧: 配信ごとに SELECT * FROM users WHERE id = ?
 	// 今: 集めた user ID を IN に渡し、owner 行を1回で取る（password は JSON に出さないので読まない）。
-	var userModels []userFillModel
+	userModels := make([]userFillModel, 0, len(missIDs))
 	if err := selectIn(ctx, tx, &userModels, "SELECT id, name, display_name, description FROM users WHERE id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
@@ -712,7 +712,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 	}
 
 	// 旧 fillUserResponse の SELECT * FROM themes WHERE user_id = ? を、user ID の IN 1回にする。
-	var themeModels []themeFillModel
+	themeModels := make([]themeFillModel, 0, len(missIDs))
 	if err := selectIn(ctx, tx, &themeModels, "SELECT id, user_id, dark_mode FROM themes WHERE user_id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
@@ -723,7 +723,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 	}
 
 	// 旧 fillUserResponse の SELECT icon_hash FROM icons WHERE user_id = ? を、user ID の IN 1回にする。
-	var iconModels []iconHashModel
+	iconModels := make([]iconHashModel, 0, len(missIDs))
 	if err := selectIn(ctx, tx, &iconModels, "SELECT user_id, icon_hash FROM icons WHERE user_id IN (?)", missIDs); err != nil {
 		return nil, err
 	}
@@ -782,7 +782,7 @@ func tagsByLivestreamID(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64)
 
 	// 旧: 配信ごとに SELECT * FROM livestream_tags WHERE livestream_id = ?
 	// 今: 配信 ID を IN に渡し、紐づきを1回で取る。ORDER BY id は旧 SELECT * の主キー順に合わせる。
-	var livestreamTagModels []*LivestreamTagModel
+	livestreamTagModels := make([]*LivestreamTagModel, 0, len(livestreamIDs))
 	if err := selectIn(ctx, tx, &livestreamTagModels, "SELECT * FROM livestream_tags WHERE livestream_id IN (?) ORDER BY id", livestreamIDs); err != nil {
 		return nil, err
 	}
@@ -798,13 +798,23 @@ func tagsByLivestreamID(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64)
 	tagIDs = uniqueInt64(tagIDs)
 
 	// 旧: タグ1件ごとに SELECT * FROM tags WHERE id = ?
-	var tagModels []TagModel
+	tagModels := make([]TagModel, 0, len(tagIDs))
 	if err := selectIn(ctx, tx, &tagModels, "SELECT * FROM tags WHERE id IN (?)", tagIDs); err != nil {
 		return nil, err
 	}
 	tagByID := make(map[int64]TagModel, len(tagModels))
 	for _, tagModel := range tagModels {
 		tagByID[tagModel.ID] = tagModel
+	}
+
+	tagCountByLivestream := make(map[int64]int, len(livestreamIDs))
+	for _, livestreamTagModel := range livestreamTagModels {
+		tagCountByLivestream[livestreamTagModel.LivestreamID]++
+	}
+	for livestreamID, n := range tagCountByLivestream {
+		if n > 0 {
+			tags[livestreamID] = make([]Tag, 0, n)
+		}
 	}
 
 	// livestream_tags の id 順のまま、配信 ID ごとの配列へ足す。ここでは SQL を出さない。
