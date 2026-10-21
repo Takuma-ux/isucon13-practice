@@ -36,7 +36,7 @@ if curl -sf "http://127.0.0.1:8080/api/tag" -H "Host: u.isucon.local" >/dev/null
 	echo "App already listening on :8080"
 else
 	echo "Starting app..."
-	ISUCON13_POWERDNS_SUBDOMAIN_ADDRESS=127.0.0.1 "$BIN" >/tmp/isupipe-pgo-capture.log 2>&1 &
+	( cd "$GO_DIR" && ISUCON13_POWERDNS_SUBDOMAIN_ADDRESS=127.0.0.1 "$BIN" ) >/tmp/isupipe-pgo-capture.log 2>&1 &
 	APP_PID=$!
 	trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
 	sleep 2
