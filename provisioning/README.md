@@ -15,6 +15,14 @@ Config in this directory is **inert** until copied or applied on the **competiti
 | Full deploy order | `./provisioning/deploy-checklist.sh` (checklist); `--preflight` / `--dry-run` |
 | Drop unused `ng_words_word` index (existing DB) | `CONFIRM_DROP_NG_WORDS_WORD=yes ./scripts/drop-ng_words-word-index.sh`; check only: `--check` |
 
+### Nginx HTTP/2
+
+`provisioning/nginx/isupipe.conf` uses `listen 443 ssl http2;` (nginx 1.18 on Ubuntu 22.04). On **nginx ≥ 1.25.1**, replace with `listen 443 ssl;` and add `http2 on;` inside the `server` block. Run `nginx -V` on the host before reload.
+
+### TCP BBR
+
+`apply.sh` installs `99-isucon-bbr.conf` only when `bbr` appears in `/proc/sys/net/ipv4/tcp_available_congestion_control` (typical on competition Ubuntu; often absent on minimal dev kernels). Sets `net.core.default_qdisc=fq` and `tcp_congestion_control=bbr`. Check: `sysctl net.ipv4.tcp_congestion_control`.
+
 **Never** restart MySQL or reload nginx locally to “test” tuning. Use dry-run and inspect generated config only.
 
 ### MySQL buffer pool incident

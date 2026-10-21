@@ -58,6 +58,7 @@ print_checklist() {
   [ ] Copy provisioning/nginx/conf.d/isucon-alp-logging.conf -> /etc/nginx/conf.d/
   [ ] Merge provisioning/nginx/isupipe.conf -> sites-enabled (vhost)
   [ ] Test:     sudo nginx -t
+  [ ] HTTP/2:   listen 443 ssl http2 (or nginx>=1.25.1: listen 443 ssl + http2 on;)
   [ ] Reload:   sudo CONFIRM_NGINX_RELOAD=yes systemctl reload nginx
 
 ── 8. Diagnostic bench run ONLY (turn OFF after) ──

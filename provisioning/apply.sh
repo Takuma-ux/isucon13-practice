@@ -14,6 +14,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ "${INFRA_DRY_RUN:-}" == "1" ]]; then
 	infra_dry_run() {
 	echo "[dry-run] Would install $ROOT/provisioning/sysctl/99-isucon.conf -> /etc/sysctl.d/"
+	echo "[dry-run] Would install 99-isucon-bbr.conf only if tcp_bbr available on host"
 	echo "[dry-run] Would install isupipe-go.service.d/limits.conf"
 	echo "[dry-run] Would run sysctl --system"
 	echo "[dry-run] Would systemctl daemon-reload"
@@ -41,6 +42,17 @@ if [[ "${CONFIRM_INFRA_APPLY:-}" != "yes" ]]; then
 fi
 
 install -D -m 0644 "$ROOT/provisioning/sysctl/99-isucon.conf" /etc/sysctl.d/99-isucon.conf
+
+BBR_CONF=/etc/sysctl.d/99-isucon-bbr.conf
+if [[ -r /proc/sys/net/ipv4/tcp_available_congestion_control ]] && \
+	grep -qw bbr /proc/sys/net/ipv4/tcp_available_congestion_control; then
+	install -D -m 0644 "$ROOT/provisioning/sysctl/99-isucon-bbr.conf" "$BBR_CONF"
+	echo "BBR: installed $BBR_CONF (tcp_bbr available)"
+else
+	rm -f "$BBR_CONF"
+	echo "BBR: skipped (tcp_bbr not in tcp_available_congestion_control; dev laptop OK)"
+fi
+
 sysctl --system
 
 install -D -m 0644 \
