@@ -169,29 +169,64 @@ func postLivecommentHandler(c echo.Context) error {
 		return err
 	}
 
+	livecomment, err := postLivecommentWithDeadlockRetry(ctx, userID, livestreamID, req)
+	if err != nil {
+		return postLivecommentHandlerError(err)
+	}
+	return c.JSON(http.StatusCreated, livecomment)
+}
+
+var (
+	errPostLivecommentBegin       = errors.New("post livecomment: begin")
+	errPostLivecommentNotFound    = errors.New("post livecomment: livestream not found")
+	errPostLivecommentGetLivestream = errors.New("post livecomment: get livestream")
+	errPostLivecommentGetNGWords  = errors.New("post livecomment: get ng words")
+	errPostLivecommentSpam        = errors.New("post livecomment: spam")
+	errPostLivecommentInsert      = errors.New("post livecomment: insert")
+	errPostLivecommentLastInsertID = errors.New("post livecomment: last insert id")
+	errPostLivecommentFill        = errors.New("post livecomment: fill")
+	errPostLivecommentCommit      = errors.New("post livecomment: commit")
+)
+
+func postLivecommentWithDeadlockRetry(ctx context.Context, userID int64, livestreamID int, req *PostLivecommentRequest) (Livecomment, error) {
+	var livecomment Livecomment
+	err := withMySQLDeadlockRetry(func() error {
+		lc, err := postLivecommentOnce(ctx, userID, livestreamID, req)
+		if err != nil {
+			return err
+		}
+		livecomment = lc
+		return nil
+	})
+	if err != nil {
+		return Livecomment{}, err
+	}
+	return livecomment, nil
+}
+
+func postLivecommentOnce(ctx context.Context, userID int64, livestreamID int, req *PostLivecommentRequest) (Livecomment, error) {
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
+		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentBegin, err)
 	}
 	defer tx.Rollback()
 
 	livestreamModel, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
+		return Livecomment{}, errPostLivecommentNotFound
 	}
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
+		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentGetLivestream, err)
 	}
 
-	// スパム判定 (Go側でstrings.Containsを使い、DBクエリを削減)
 	var ngwords []*NGWord
 	if err := tx.SelectContext(ctx, &ngwords, "SELECT id, user_id, livestream_id, word FROM ng_words WHERE user_id = ? AND livestream_id = ?", livestreamModel.UserID, livestreamModel.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get NG words: "+err.Error())
+		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentGetNGWords, err)
 	}
 
 	for _, ngword := range ngwords {
 		if strings.Contains(req.Comment, ngword.Word) {
-			return echo.NewHTTPError(http.StatusBadRequest, "このコメントがスパム判定されました")
+			return Livecomment{}, errPostLivecommentSpam
 		}
 	}
 
@@ -206,25 +241,52 @@ func postLivecommentHandler(c echo.Context) error {
 
 	rs, err := tx.NamedExecContext(ctx, "INSERT INTO livecomments (user_id, livestream_id, comment, tip, created_at) VALUES (:user_id, :livestream_id, :comment, :tip, :created_at)", livecommentModel)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livecomment: "+err.Error())
+		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentInsert, err)
 	}
 
 	livecommentID, err := rs.LastInsertId()
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted livecomment id: "+err.Error())
+		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentLastInsertID, err)
 	}
 	livecommentModel.ID = livecommentID
 
 	livecomment, err := fillLivecommentResponseWithLivestream(ctx, tx, livecommentModel, livestreamModel)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment: "+err.Error())
+		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentFill, err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentCommit, err)
 	}
+	return livecomment, nil
+}
 
-	return c.JSON(http.StatusCreated, livecomment)
+func postLivecommentHandlerError(err error) *echo.HTTPError {
+	switch {
+	case errors.Is(err, errPostLivecommentSpam):
+		return echo.NewHTTPError(http.StatusBadRequest, "このコメントがスパム判定されました")
+	case errors.Is(err, errPostLivecommentNotFound):
+		return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
+	case errors.Is(err, errPostLivecommentBegin):
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
+	case errors.Is(err, errPostLivecommentGetLivestream):
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
+	case errors.Is(err, errPostLivecommentGetNGWords):
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get NG words: "+err.Error())
+	case errors.Is(err, errPostLivecommentInsert):
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livecomment: "+err.Error())
+	case errors.Is(err, errPostLivecommentLastInsertID):
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted livecomment id: "+err.Error())
+	case errors.Is(err, errPostLivecommentFill):
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment: "+err.Error())
+	case errors.Is(err, errPostLivecommentCommit):
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+	default:
+		if isMySQLDeadlock(err) {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livecomment: "+err.Error())
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
 }
 
 func reportLivecommentHandler(c echo.Context) error {
