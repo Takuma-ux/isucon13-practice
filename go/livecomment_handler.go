@@ -465,6 +465,9 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 	var livestreamPtr *Livestream
 	if cached, ok := getLivestreamFromCache(ctx, livestreamID); ok {
 		livestreamPtr = cached
+	} else if assembled, ok := assembleLivestreamFromProcessCache(ctx, livestreamID, nil); ok {
+		livestreamPtr = assembled
+		cacheLivestream(ctx, livestreamID, livestreamPtr)
 	} else {
 		var livestreamModel LivestreamModel
 		if err := tx.GetContext(ctx, &livestreamModel, "SELECT * FROM livestreams WHERE id = ?", livestreamID); err != nil {

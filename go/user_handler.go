@@ -372,6 +372,7 @@ func postUserIcon(ctx context.Context, userID int64, image []byte) (int64, error
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("failed to commit: %w", err)
 	}
+	invalidateUserProfileCache(userID)
 	return iconID, nil
 }
 
@@ -661,6 +662,12 @@ func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (Us
 	if cached, ok := getUserFromCache(ctx, userModel.ID); ok {
 		return *cached, nil
 	}
+	if profile, ok := getUserProfileFromProcessCache(userModel.ID); ok {
+		cacheUser(ctx, userModel.ID, profile)
+		return *profile, nil
+	}
+
+	fillEpoch := snapshotUserProfileCacheEpoch(userModel.ID)
 
 	themeModel := ThemeModel{}
 	if err := tx.GetContext(ctx, &themeModel, "SELECT * FROM themes WHERE user_id = ?", userModel.ID); err != nil {
@@ -686,6 +693,7 @@ func fillUserResponse(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (Us
 		IconHash: iconHash,
 	}
 
+	putUserProfileCache(&user, fillEpoch)
 	cacheUser(ctx, userModel.ID, &user)
 	return user, nil
 }

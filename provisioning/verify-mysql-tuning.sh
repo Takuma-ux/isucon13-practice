@@ -40,6 +40,11 @@ else
 	exit 1
 fi
 
+echo "--- InnoDB I/O (read-only) ---"
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h127.0.0.1 -Nse \
+	"SELECT @@innodb_flush_neighbors, @@innodb_flush_method, @@innodb_io_capacity, @@innodb_io_capacity_max" \
+	"$MYSQL_DB" | awk '{print "innodb_flush_neighbors=" $1 " innodb_flush_method=" $2 " innodb_io_capacity=" $3 " innodb_io_capacity_max=" $4}'
+
 if [[ -f /etc/mysql/mysql.conf.d/isucon-tuning.cnf ]]; then
 	echo "--- /etc/mysql/mysql.conf.d/isucon-tuning.cnf ---"
 	cat /etc/mysql/mysql.conf.d/isucon-tuning.cnf

@@ -55,6 +55,9 @@ sudo CONFIRM_NGINX_RELOAD=yes systemctl reload nginx
 
 - `innodb_buffer_pool_size` (from MemTotal, 45% policy)
 - `innodb_flush_log_at_trx_commit = 2`
+- `innodb_flush_neighbors = 0` (SSD/EBS; no adjacent-page flush benefit)
+- `innodb_flush_method = O_DIRECT` (InnoDB buffer pool is primary cache; safe on competition Ubuntu **ext4** root — confirm with `findmnt /` and `@@innodb_flush_method` before apply)
+- `innodb_io_capacity = 2000`, `innodb_io_capacity_max = 4000` (raise from HDD-oriented defaults; not a substitute for correct queries)
 - `innodb_lock_wait_timeout = 10` (default 50s)
 - `performance_schema = OFF`
 - `table_open_cache = 4096`, `thread_cache_size = 64`

@@ -77,6 +77,13 @@ skip_name_resolve = 1
 max_connections = 500
 innodb_buffer_pool_size = ${pool_mb}M
 innodb_flush_log_at_trx_commit = 2
+# SSD/EBS (gp3): neighbor flushing helps HDD only; 0 avoids extra page writes on modern storage.
+innodb_flush_neighbors = 0
+# Linux ext4/xfs on EC2: skip OS page cache double-buffering when buffer pool is large (see README).
+innodb_flush_method = O_DIRECT
+# Defaults (200) assume HDD; gp3 can sustain higher flush/cleaner rates on a bench host.
+innodb_io_capacity = 2000
+innodb_io_capacity_max = 4000
 # Default 50s; lock waits (not deadlocks) should fail fast under bench contention (~100ms+ observed legitimately).
 innodb_lock_wait_timeout = 10
 performance_schema = OFF

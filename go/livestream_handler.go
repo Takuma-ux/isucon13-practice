@@ -587,6 +587,11 @@ func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestr
 			livestreams[i] = *cached
 			continue
 		}
+		if assembled, ok := assembleLivestreamFromProcessCache(ctx, livestreamModel.ID, owners); ok {
+			livestreams[i] = *assembled
+			cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
+			continue
+		}
 		uncachedModels = append(uncachedModels, livestreamModel)
 		uncachedIDs = append(uncachedIDs, livestreamModel.ID)
 		uncachedIdx = append(uncachedIdx, i)
@@ -624,6 +629,8 @@ func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestr
 			StartAt:      livestreamModel.StartAt,
 			EndAt:        livestreamModel.EndAt,
 		}
+		putLivestreamShellCache(livestreamShellFromModel(livestreamModel, tags))
+		putUserProfileCache(owner, snapshotUserProfileCacheEpoch(owner.ID))
 		cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
 	}
 	return livestreams, nil
@@ -642,6 +649,11 @@ func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (
 	for _, id := range livestreamIDs {
 		if cached, ok := getLivestreamFromCache(ctx, id); ok {
 			livestreamByID[id] = *cached
+			continue
+		}
+		if assembled, ok := assembleLivestreamFromProcessCache(ctx, id, nil); ok {
+			livestreamByID[id] = *assembled
+			cacheLivestream(ctx, id, assembled)
 			continue
 		}
 		missIDs = append(missIDs, id)
@@ -694,10 +706,20 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 			users[id] = cached
 			continue
 		}
+		if profile, ok := getUserProfileFromProcessCache(id); ok {
+			users[id] = profile
+			cacheUser(ctx, id, profile)
+			continue
+		}
 		missIDs = append(missIDs, id)
 	}
 	if len(missIDs) == 0 {
 		return users, nil
+	}
+
+	fillEpoch := make(map[int64]uint64, len(missIDs))
+	for _, id := range missIDs {
+		fillEpoch[id] = snapshotUserProfileCacheEpoch(id)
 	}
 
 	// 旧: 配信ごとに SELECT * FROM users WHERE id = ?
@@ -753,6 +775,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 			},
 			IconHash: iconHash,
 		}
+		putUserProfileCache(&user, fillEpoch[userModel.ID])
 		cacheUser(ctx, userModel.ID, &user)
 		users[userModel.ID] = &user
 	}

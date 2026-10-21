@@ -135,6 +135,7 @@ func initializeHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to initialize: "+err.Error())
 	}
 	invalidateTagsCache()
+	invalidateProcessReadCaches()
 	if err := warmTagsCache(c.Request().Context()); err != nil {
 		c.Logger().Warnf("tags cache prewarm after initialize failed: %v", err)
 	}

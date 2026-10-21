@@ -1,5 +1,5 @@
 # Generated on the target server by apply-mysql-tuning.sh (do not copy from repo as-is).
 # Preview: MYSQL_TUNING_DRY_RUN=1 sudo -E provisioning/apply-mysql-tuning.sh
 #
-# Includes: buffer pool (from MemTotal), flush_log_at_trx_commit=2, performance_schema=OFF,
-# table_open_cache, thread_cache_size.
+# Includes: buffer pool (from MemTotal), flush_log_at_trx_commit=2, flush_neighbors=0,
+# flush_method=O_DIRECT, io_capacity settings, performance_schema=OFF, table_open_cache, thread_cache_size.
