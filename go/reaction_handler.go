@@ -170,10 +170,11 @@ func fillReactionsForLivestream(ctx context.Context, tx *sqlx.Tx, reactionModels
 	if len(livestreams) != 1 {
 		return nil, sql.ErrNoRows
 	}
-	livestreamPtr, ok := getLivestreamFromCache(ctx, livestreamID)
-	if !ok {
-		livestreamPtr = &livestreams[0]
+	livestream := livestreams[0]
+	if livestream.Tags == nil {
+		livestream.Tags = []Tag{}
 	}
+	livestreamPtr := &livestream
 
 	reactions := make([]Reaction, len(reactionModels))
 	for i, m := range reactionModels {

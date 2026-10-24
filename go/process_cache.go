@@ -229,6 +229,10 @@ func assembleLivestreamFromProcessCache(ctx context.Context, livestreamID int64,
 	if !ok {
 		return nil, false
 	}
+	tags := shell.Tags
+	if tags == nil {
+		tags = []Tag{}
+	}
 	ls := &Livestream{
 		ID:           shell.ID,
 		Owner:        owner,
@@ -236,7 +240,7 @@ func assembleLivestreamFromProcessCache(ctx context.Context, livestreamID int64,
 		Description:  shell.Description,
 		PlaylistUrl:  shell.PlaylistUrl,
 		ThumbnailUrl: shell.ThumbnailUrl,
-		Tags:         append([]Tag(nil), shell.Tags...),
+		Tags:         append([]Tag(nil), tags...),
 		StartAt:      shell.StartAt,
 		EndAt:        shell.EndAt,
 	}

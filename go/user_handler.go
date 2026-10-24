@@ -703,6 +703,9 @@ func getLivestreamFromCache(ctx context.Context, id int64) (*Livestream, bool) {
 }
 
 func cacheLivestream(ctx context.Context, id int64, livestream *Livestream) {
+	if livestream != nil && livestream.Tags == nil {
+		livestream.Tags = []Tag{}
+	}
 	if v := ctx.Value(responseCacheKey{}); v != nil {
 		v.(*responseCache).livestreams[id] = livestream
 	}
