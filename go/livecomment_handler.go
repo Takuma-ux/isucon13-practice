@@ -533,7 +533,9 @@ func fillLivecommentsForLivestream(ctx context.Context, q readQueryer, livecomme
 		return []Livecomment{}, nil
 	}
 
+	var err error
 	var livestreamPtr *Livestream
+	var usersByID map[int64]*User
 	if cached, ok := getLivestreamFromCache(ctx, livestreamID); ok {
 		livestreamPtr = cached
 	} else if assembled, ok := assembleLivestreamFromProcessCache(ctx, livestreamID, nil); ok {
@@ -552,7 +554,7 @@ func fillLivecommentsForLivestream(ctx context.Context, q readQueryer, livecomme
 		userIDs = append(userIDs, livestreamModel.UserID)
 		userIDs = uniqueInt64(userIDs)
 
-		usersByID, err := fillUsersByIDs(ctx, q, userIDs)
+		usersByID, err = fillUsersByIDs(ctx, q, userIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -571,15 +573,17 @@ func fillLivecommentsForLivestream(ctx context.Context, q readQueryer, livecomme
 		livestreamPtr = &livestream
 	}
 
-	userIDs := make([]int64, 0, len(livecommentModels))
-	for _, m := range livecommentModels {
-		userIDs = append(userIDs, m.UserID)
-	}
-	userIDs = uniqueInt64(userIDs)
+	if usersByID == nil {
+		userIDs := make([]int64, 0, len(livecommentModels))
+		for _, m := range livecommentModels {
+			userIDs = append(userIDs, m.UserID)
+		}
+		userIDs = uniqueInt64(userIDs)
 
-	usersByID, err := fillUsersByIDs(ctx, q, userIDs)
-	if err != nil {
-		return nil, err
+		usersByID, err = fillUsersByIDs(ctx, q, userIDs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	livecomments := make([]Livecomment, len(livecommentModels))

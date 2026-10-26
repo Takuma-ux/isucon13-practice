@@ -136,7 +136,9 @@ func fillReactionsForLivestream(ctx context.Context, q readQueryer, reactionMode
 		return []Reaction{}, nil
 	}
 
+	var err error
 	var livestreamPtr *Livestream
+	var usersByID map[int64]*User
 	if cached, ok := getLivestreamFromCache(ctx, livestreamID); ok {
 		livestreamPtr = cached
 	} else if assembled, ok := assembleLivestreamFromProcessCache(ctx, livestreamID, nil); ok {
@@ -155,7 +157,7 @@ func fillReactionsForLivestream(ctx context.Context, q readQueryer, reactionMode
 		userIDs = append(userIDs, livestreamModel.UserID)
 		userIDs = uniqueInt64(userIDs)
 
-		usersByID, err := fillUsersByIDs(ctx, q, userIDs)
+		usersByID, err = fillUsersByIDs(ctx, q, userIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -174,15 +176,17 @@ func fillReactionsForLivestream(ctx context.Context, q readQueryer, reactionMode
 		livestreamPtr = &livestream
 	}
 
-	userIDs := make([]int64, 0, len(reactionModels))
-	for _, m := range reactionModels {
-		userIDs = append(userIDs, m.UserID)
-	}
-	userIDs = uniqueInt64(userIDs)
+	if usersByID == nil {
+		userIDs := make([]int64, 0, len(reactionModels))
+		for _, m := range reactionModels {
+			userIDs = append(userIDs, m.UserID)
+		}
+		userIDs = uniqueInt64(userIDs)
 
-	usersByID, err := fillUsersByIDs(ctx, q, userIDs)
-	if err != nil {
-		return nil, err
+		usersByID, err = fillUsersByIDs(ctx, q, userIDs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	reactions := make([]Reaction, len(reactionModels))
