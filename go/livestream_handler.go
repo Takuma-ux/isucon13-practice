@@ -376,18 +376,9 @@ func exitLivestreamHandler(c echo.Context) error {
 }
 
 func exitLivestream(ctx context.Context, userID int64, livestreamID int) error {
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx, "DELETE FROM livestream_viewers_history WHERE user_id = ? AND livestream_id = ?", userID, livestreamID); err != nil {
+	// Single-row DELETE needs no explicit transaction (same as enter autocommit INSERT).
+	if _, err := dbConn.ExecContext(ctx, "DELETE FROM livestream_viewers_history WHERE user_id = ? AND livestream_id = ?", userID, livestreamID); err != nil {
 		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit: %w", err)
 	}
 	statsOnExit(int64(livestreamID))
 	return nil
