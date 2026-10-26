@@ -681,12 +681,9 @@ func fillLivecommentReportsResponse(ctx context.Context, q readQueryer, reportMo
 	livestreamIDs = uniqueInt64(livestreamIDs)
 
 	livestreamRowModels, missLivestreamIDs := livestreamModelsFromProcessCache(livestreamIDs)
-	for _, id := range missLivestreamIDs {
-		model, err := coalescedLoadLivestreamRow(ctx, q, id)
-		if err != nil {
-			return nil, err
-		}
-		livestreamRowModels = append(livestreamRowModels, model)
+	livestreamRowModels, err := appendLivestreamRowsOnCacheMiss(ctx, q, livestreamRowModels, missLivestreamIDs)
+	if err != nil {
+		return nil, err
 	}
 	livestreamModelByID := make(map[int64]LivestreamModel, len(livestreamRowModels))
 	for _, ls := range livestreamRowModels {

@@ -409,6 +409,75 @@ func finalizeUserIconUpload(ctx context.Context, userID int64, iconHash string, 
 	return nil
 }
 
+// loadUserProfilesFromDBByIDs loads owner/commenter profiles for fillUsersByIDs cache misses (3 SQL round trips, not 3×N).
+func loadUserProfilesFromDBByIDs(ctx context.Context, q readQueryer, userIDs []int64) (map[int64]User, error) {
+	userIDs = uniqueInt64(userIDs)
+	out := make(map[int64]User, len(userIDs))
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+
+	var userRows []userFillModel
+	if err := selectIn(ctx, q, &userRows, "SELECT id, name, display_name, description FROM users WHERE id IN (?)", userIDs); err != nil {
+		return nil, err
+	}
+	if len(userRows) != len(userIDs) {
+		return nil, sql.ErrNoRows
+	}
+	userByID := make(map[int64]userFillModel, len(userRows))
+	for _, row := range userRows {
+		userByID[row.ID] = row
+	}
+
+	var themeRows []ThemeModel
+	if err := selectIn(ctx, q, &themeRows, "SELECT * FROM themes WHERE user_id IN (?)", userIDs); err != nil {
+		return nil, err
+	}
+	themeByUser := make(map[int64]ThemeModel, len(themeRows))
+	for _, row := range themeRows {
+		themeByUser[row.UserID] = row
+	}
+
+	var iconRows []struct {
+		UserID   int64  `db:"user_id"`
+		IconHash string `db:"icon_hash"`
+	}
+	if err := selectIn(ctx, q, &iconRows, "SELECT user_id, icon_hash FROM icons WHERE user_id IN (?)", userIDs); err != nil {
+		return nil, err
+	}
+	iconByUser := make(map[int64]string, len(iconRows))
+	for _, row := range iconRows {
+		iconByUser[row.UserID] = row.IconHash
+	}
+
+	for _, id := range userIDs {
+		um, ok := userByID[id]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		theme, ok := themeByUser[id]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		iconHash := defaultIconHash
+		if h, ok := iconByUser[id]; ok && h != "" {
+			iconHash = h
+		}
+		out[id] = User{
+			ID:          um.ID,
+			Name:        um.Name,
+			DisplayName: um.DisplayName,
+			Description: um.Description,
+			Theme: Theme{
+				ID:       theme.ID,
+				DarkMode: theme.DarkMode,
+			},
+			IconHash: iconHash,
+		}
+	}
+	return out, nil
+}
+
 func loadUserProfileFromDB(ctx context.Context, q readQueryer, userModel UserModel) (User, error) {
 	themeModel := ThemeModel{}
 	if err := q.GetContext(ctx, &themeModel, "SELECT * FROM themes WHERE user_id = ?", userModel.ID); err != nil {

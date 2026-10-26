@@ -610,11 +610,25 @@ func fillUsersByIDs(ctx context.Context, q readQueryer, userIDs []int64) (map[in
 		return users, nil
 	}
 
-	for _, id := range missIDs {
-		user, err := coalescedLoadUserProfile(ctx, q, id)
+	missIDs = uniqueInt64(missIDs)
+	if len(missIDs) == 1 {
+		user, err := coalescedLoadUserProfile(ctx, q, missIDs[0])
 		if err != nil {
 			return nil, err
 		}
+		u := cloneUser(&user)
+		cacheUser(ctx, missIDs[0], u)
+		users[missIDs[0]] = u
+		return users, nil
+	}
+
+	loaded, err := loadUserProfilesFromDBByIDs(ctx, q, missIDs)
+	if err != nil {
+		return nil, err
+	}
+	for id, user := range loaded {
+		fillEpoch := snapshotUserProfileCacheEpoch(id)
+		putUserProfileCache(cloneUser(&user), fillEpoch)
 		u := cloneUser(&user)
 		cacheUser(ctx, id, u)
 		users[id] = u
@@ -714,6 +728,45 @@ func uniqueInt64(ids []int64) []int64 {
 		out = append(out, id)
 	}
 	return out
+}
+
+// loadLivestreamModelsByIDs loads livestreams rows for process-cache misses in one IN query.
+func loadLivestreamModelsByIDs(ctx context.Context, q readQueryer, livestreamIDs []int64) ([]LivestreamModel, error) {
+	livestreamIDs = uniqueInt64(livestreamIDs)
+	if len(livestreamIDs) == 0 {
+		return []LivestreamModel{}, nil
+	}
+	var fetched []LivestreamModel
+	if err := selectIn(ctx, q, &fetched, "SELECT * FROM livestreams WHERE id IN (?)", livestreamIDs); err != nil {
+		return nil, err
+	}
+	if len(fetched) != len(livestreamIDs) {
+		return nil, sql.ErrNoRows
+	}
+	for i := range fetched {
+		putLivestreamRowCache(&fetched[i])
+	}
+	return fetched, nil
+}
+
+// appendLivestreamRowsOnCacheMiss extends cached rows with DB loads for shell-cache misses.
+func appendLivestreamRowsOnCacheMiss(ctx context.Context, q readQueryer, cached []LivestreamModel, missIDs []int64) ([]LivestreamModel, error) {
+	missIDs = uniqueInt64(missIDs)
+	if len(missIDs) == 0 {
+		return cached, nil
+	}
+	if len(missIDs) == 1 {
+		model, err := coalescedLoadLivestreamRow(ctx, q, missIDs[0])
+		if err != nil {
+			return nil, err
+		}
+		return append(cached, model), nil
+	}
+	fetched, err := loadLivestreamModelsByIDs(ctx, q, missIDs)
+	if err != nil {
+		return nil, err
+	}
+	return append(cached, fetched...), nil
 }
 
 // selectIn は IN (?) を ID の個数だけ広げ、その SELECT を1回実行して dest にスキャンする。
