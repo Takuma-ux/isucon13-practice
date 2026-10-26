@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v4"
@@ -30,5 +31,11 @@ func TestErrorResponseHandlerStatusCodes(t *testing.T) {
 	e.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("fail: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "code=500, message=boom") {
+		t.Fatalf("fail: unexpected body=%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "dial tcp") {
+		t.Fatalf("fail: body should not contain driver text")
 	}
 }

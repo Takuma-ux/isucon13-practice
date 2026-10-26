@@ -34,6 +34,10 @@ const (
 	httpReadHeaderTimeout = 10 * time.Second
 	// Nginx client keepalive_timeout is 65s; upstream keepalive default is 60s — stay open slightly longer on the app side.
 	httpIdleTimeout = 75 * time.Second
+
+	// Largest bench POST /api/icon JSON is ~229KiB (embedded JPEG as base64 in JSON; see isucon13 IconSched images).
+	// ~3× headroom for legitimate uploads; rejects oversized bodies before JSON decode.
+	httpRequestBodyLimit = "700K"
 )
 
 var (
@@ -160,6 +164,7 @@ func main() {
 	e.Logger.SetLevel(echolog.INFO)
 	e.JSONSerializer = GoJSONSerializer{}
 	e.Use(middleware.Recover())
+	e.Use(middleware.BodyLimit(httpRequestBodyLimit))
 	if os.Getenv("ISUCON13_ACCESS_LOG") == "1" {
 		e.Use(middleware.Logger())
 	}
@@ -287,14 +292,14 @@ type ErrorResponse struct {
 func errorResponseHandler(err error, c echo.Context) {
 	if he, ok := err.(*echo.HTTPError); ok {
 		logHTTPError(c, he.Code, err)
-		if e := c.JSON(he.Code, &ErrorResponse{Error: err.Error()}); e != nil {
+		if e := c.JSON(he.Code, &ErrorResponse{Error: clientFacingHTTPErrorString(he)}); e != nil {
 			c.Logger().Errorf("%+v", e)
 		}
 		return
 	}
 
 	c.Logger().Errorf("error at %s: %+v", c.Path(), err)
-	if e := c.JSON(http.StatusInternalServerError, &ErrorResponse{Error: err.Error()}); e != nil {
+	if e := c.JSON(http.StatusInternalServerError, &ErrorResponse{Error: "code=500, message=internal server error"}); e != nil {
 		c.Logger().Errorf("%+v", e)
 	}
 }
