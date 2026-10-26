@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/jmoiron/sqlx"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -65,7 +64,7 @@ func coalescedLoadUserProfile(ctx context.Context, q readQueryer, userID int64) 
 	return v.(User), nil
 }
 
-func coalescedLoadLivestreamRow(ctx context.Context, tx *sqlx.Tx, livestreamID int64) (LivestreamModel, error) {
+func coalescedLoadLivestreamRow(ctx context.Context, q readQueryer, livestreamID int64) (LivestreamModel, error) {
 	if shell, ok := getLivestreamShellFromProcessCache(livestreamID); ok {
 		return livestreamModelFromShell(shell), nil
 	}
@@ -79,7 +78,7 @@ func coalescedLoadLivestreamRow(ctx context.Context, tx *sqlx.Tx, livestreamID i
 		processCacheTestLivestreamRowDBLoads.Add(1)
 
 		var model LivestreamModel
-		err := tx.GetContext(ctx, &model, "SELECT * FROM livestreams WHERE id = ?", livestreamID)
+		err := q.GetContext(ctx, &model, "SELECT * FROM livestreams WHERE id = ?", livestreamID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
 		}

@@ -79,12 +79,7 @@ func getLivecommentsHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "livestream_id in path must be integer")
 	}
 
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
-	}
-	defer tx.Rollback()
-
+	// Read-only path: no transaction (same tolerance as search GET). Fill uses autocommit SELECTs.
 	query := "SELECT * FROM livecomments WHERE livestream_id = ? ORDER BY created_at DESC"
 	if c.QueryParam("limit") != "" {
 		limit, err := strconv.Atoi(c.QueryParam("limit"))
@@ -95,18 +90,13 @@ func getLivecommentsHandler(c echo.Context) error {
 	}
 
 	livecommentModels := []LivecommentModel{}
-	err = tx.SelectContext(ctx, &livecommentModels, query, livestreamID)
-	if err != nil {
+	if err := dbConn.SelectContext(ctx, &livecommentModels, query, livestreamID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livecomments: "+err.Error())
 	}
 
-	livecomments, err := fillLivecommentsForLivestream(ctx, tx, livecommentModels, int64(livestreamID))
+	livecomments, err := fillLivecommentsForLivestream(ctx, dbConn, livecommentModels, int64(livestreamID))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fil livecomments: "+err.Error())
-	}
-
-	if err := tx.Commit(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
 
 	return c.JSON(http.StatusOK, livecomments)
@@ -534,7 +524,7 @@ func moderateHandlerError(err error) *echo.HTTPError {
 // fillLivecommentsForLivestream は GET /api/livestream/:livestream_id/livecomment 用。
 // パスの livestream を1回取り、投稿者と配信者の user ID をまとめて fillUsersByIDs し、
 // fillLivestreamsResponseWithOwners 経由で2回目の owner 用 users/themes/icons SELECT を避ける。
-func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecommentModels []LivecommentModel, livestreamID int64) ([]Livecomment, error) {
+func fillLivecommentsForLivestream(ctx context.Context, q readQueryer, livecommentModels []LivecommentModel, livestreamID int64) ([]Livecomment, error) {
 	if len(livecommentModels) == 0 {
 		return []Livecomment{}, nil
 	}
@@ -546,7 +536,7 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 		livestreamPtr = assembled
 		cacheLivestream(ctx, livestreamID, livestreamPtr)
 	} else {
-		livestreamModel, err := getLivestreamModelByID(ctx, tx, livestreamID)
+		livestreamModel, err := getLivestreamModelByID(ctx, q, livestreamID)
 		if err != nil {
 			return nil, err
 		}
@@ -558,12 +548,12 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 		userIDs = append(userIDs, livestreamModel.UserID)
 		userIDs = uniqueInt64(userIDs)
 
-		usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+		usersByID, err := fillUsersByIDs(ctx, q, userIDs)
 		if err != nil {
 			return nil, err
 		}
 
-		livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamID}, usersByID)
+		livestreams, err := fillLivestreamsResponseWithOwners(ctx, q, []*LivestreamModel{&livestreamModel}, []int64{livestreamID}, usersByID)
 		if err != nil {
 			return nil, err
 		}
@@ -583,7 +573,7 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 	}
 	userIDs = uniqueInt64(userIDs)
 
-	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+	usersByID, err := fillUsersByIDs(ctx, q, userIDs)
 	if err != nil {
 		return nil, err
 	}

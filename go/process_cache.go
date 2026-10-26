@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-
-	"github.com/jmoiron/sqlx"
 	"sync"
 )
 
@@ -166,8 +164,8 @@ func livestreamModelsFromProcessCache(livestreamIDs []int64) ([]LivestreamModel,
 	return models, miss
 }
 
-func getLivestreamModelByID(ctx context.Context, tx *sqlx.Tx, livestreamID int64) (LivestreamModel, error) {
-	return coalescedLoadLivestreamRow(ctx, tx, livestreamID)
+func getLivestreamModelByID(ctx context.Context, q readQueryer, livestreamID int64) (LivestreamModel, error) {
+	return coalescedLoadLivestreamRow(ctx, q, livestreamID)
 }
 
 func getUserProfileFromProcessCache(userID int64) (*User, bool) {
