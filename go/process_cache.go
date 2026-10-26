@@ -51,6 +51,7 @@ func invalidateProcessReadCaches() {
 	userProfileCacheMu.Unlock()
 
 	clearIconImageCache()
+	clearNGWordsCache()
 }
 
 func snapshotUserProfileCacheEpoch(userID int64) uint64 {

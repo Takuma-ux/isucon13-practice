@@ -120,16 +120,18 @@ func getNgwords(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "livestream_id in path must be integer")
 	}
 
-	var ngWords []*NGWord
-	if err := dbConn.SelectContext(ctx, &ngWords, "SELECT * FROM ng_words WHERE user_id = ? AND livestream_id = ? ORDER BY created_at DESC", userID, livestreamID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return c.JSON(http.StatusOK, []*NGWord{})
-		} else {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get NG words: "+err.Error())
-		}
+	ngWords, err := ngWordsForOwnerLivestream(ctx, dbConn, userID, int64(livestreamID))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get NG words: "+err.Error())
 	}
-
-	return c.JSON(http.StatusOK, ngWords)
+	if len(ngWords) == 0 {
+		return c.JSON(http.StatusOK, []*NGWord{})
+	}
+	out := make([]*NGWord, len(ngWords))
+	for i := range ngWords {
+		out[i] = &ngWords[i]
+	}
+	return c.JSON(http.StatusOK, out)
 }
 
 func postLivecommentHandler(c echo.Context) error {
@@ -206,13 +208,7 @@ type postLivecommentCommitted struct {
 }
 
 func postLivecommentInsertOnce(ctx context.Context, userID int64, livestreamID int, req *PostLivecommentRequest) (LivecommentModel, LivestreamModel, error) {
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
-		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentBegin, err)
-	}
-	defer tx.Rollback()
-
-	livestreamModel, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
+	livestreamModel, err := getLivestreamModelByID(ctx, dbConn, int64(livestreamID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return LivecommentModel{}, LivestreamModel{}, errPostLivecommentNotFound
 	}
@@ -220,8 +216,8 @@ func postLivecommentInsertOnce(ctx context.Context, userID int64, livestreamID i
 		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentGetLivestream, err)
 	}
 
-	var ngwords []*NGWord
-	if err := tx.SelectContext(ctx, &ngwords, "SELECT id, user_id, livestream_id, word FROM ng_words WHERE user_id = ? AND livestream_id = ?", livestreamModel.UserID, livestreamModel.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	ngwords, err := ngWordsForOwnerLivestream(ctx, dbConn, livestreamModel.UserID, livestreamModel.ID)
+	if err != nil {
 		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentGetNGWords, err)
 	}
 
@@ -240,7 +236,7 @@ func postLivecommentInsertOnce(ctx context.Context, userID int64, livestreamID i
 		CreatedAt:    now,
 	}
 
-	rs, err := tx.NamedExecContext(ctx, "INSERT INTO livecomments (user_id, livestream_id, comment, tip, created_at) VALUES (:user_id, :livestream_id, :comment, :tip, :created_at)", livecommentModel)
+	rs, err := dbConn.NamedExecContext(ctx, "INSERT INTO livecomments (user_id, livestream_id, comment, tip, created_at) VALUES (:user_id, :livestream_id, :comment, :tip, :created_at)", livecommentModel)
 	if err != nil {
 		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentInsert, err)
 	}
@@ -250,10 +246,6 @@ func postLivecommentInsertOnce(ctx context.Context, userID int64, livestreamID i
 		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentLastInsertID, err)
 	}
 	livecommentModel.ID = livecommentID
-
-	if err := tx.Commit(); err != nil {
-		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentCommit, err)
-	}
 
 	return livecommentModel, livestreamModel, nil
 }
@@ -454,6 +446,7 @@ func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngW
 	if err := tx.Commit(); err != nil {
 		return 0, del, fmt.Errorf("%w: %w", errModerateCommit, err)
 	}
+	invalidateNGWordsCacheForOwnerLivestream(owned.UserID, int64(livestreamID))
 	statsOnModerateDeleted(ctx, int64(livestreamID), owned.UserID, del)
 	return wordID, del, nil
 }
