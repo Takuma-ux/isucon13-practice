@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/sessions"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
@@ -22,7 +21,7 @@ const wantDecodeErrorMsg = "code=400, message=failed to decode the request body 
 func newTestEcho() *echo.Echo {
 	e := echo.New()
 	e.HTTPErrorHandler = errorResponseHandler
-	e.Use(session.Middleware(sessions.NewCookieStore(secret)))
+	e.Use(session.Middleware(newSessionCookieStore(secret)))
 	return e
 }
 

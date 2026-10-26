@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gorilla/securecookie"
-	"github.com/gorilla/sessions"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
@@ -36,6 +35,7 @@ func sessionValuesNewFormat(userID int64, expires int64) map[interface{}]interfa
 
 func encodeSessionCookie(vals map[interface{}]interface{}) (string, error) {
 	codecs := securecookie.CodecsFromPairs(testSessionSecret())
+	configureSessionCodecs(codecs)
 	return securecookie.EncodeMulti(defaultSessionIDKey, vals, codecs...)
 }
 
@@ -48,7 +48,7 @@ func gobLen(vals map[interface{}]interface{}) int {
 }
 
 func echoContextWithSessionCookie(cookieValue string) echo.Context {
-	store := sessions.NewCookieStore(testSessionSecret())
+	store := newSessionCookieStore(testSessionSecret())
 	e := echo.New()
 	e.Use(session.Middleware(store))
 

@@ -21,7 +21,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
-	"github.com/gorilla/sessions"
 	"github.com/labstack/echo-contrib/session"
 	echolog "github.com/labstack/gommon/log"
 )
@@ -178,7 +177,7 @@ func main() {
 	case "klauspost":
 		e.Use(klauspostGzipMiddleware(klauspostGzipConfig{Skipper: gzipSkipIcon}))
 	}
-	cookieStore := sessions.NewCookieStore(secret)
+	cookieStore := newSessionCookieStore(secret)
 	cookieStore.Options.Domain = "*.u.isucon.local"
 	e.Use(session.Middleware(cookieStore))
 

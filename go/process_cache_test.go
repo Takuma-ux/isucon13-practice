@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
@@ -43,7 +42,7 @@ func mysqlSessionQuestions(db *sqlx.DB) (int64, error) {
 func newProcessCacheTestEcho() *echo.Echo {
 	e := echo.New()
 	e.HTTPErrorHandler = errorResponseHandler
-	e.Use(session.Middleware(sessions.NewCookieStore(secret)))
+	e.Use(session.Middleware(newSessionCookieStore(secret)))
 	e.POST("/api/login", loginHandler)
 	e.POST("/api/icon", postIconHandler)
 	e.GET("/api/livestream/search", searchLivestreamsHandler)
