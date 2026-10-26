@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
@@ -125,13 +124,14 @@ func postReactionHandler(c echo.Context) error {
 	}
 	reactionModel.ID = reactionID
 
-	reaction, err := fillReactionResponse(ctx, tx, reactionModel)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
-	}
-
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+	}
+
+	// Response fill is read-only; run after commit so the write txn is not held during owner/tag SELECTs.
+	reaction, err := fillReactionResponse(ctx, dbConn, reactionModel)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
 	}
 	statsOnReactionPosted(livestreamModel.UserID, int64(livestreamID), req.EmojiName)
 
@@ -212,8 +212,8 @@ func fillReactionsForLivestream(ctx context.Context, q readQueryer, reactionMode
 	return reactions, nil
 }
 
-func fillReactionResponse(ctx context.Context, tx *sqlx.Tx, reactionModel ReactionModel) (Reaction, error) {
-	reactions, err := fillReactionsForLivestream(ctx, tx, []ReactionModel{reactionModel}, reactionModel.LivestreamID)
+func fillReactionResponse(ctx context.Context, q readQueryer, reactionModel ReactionModel) (Reaction, error) {
+	reactions, err := fillReactionsForLivestream(ctx, q, []ReactionModel{reactionModel}, reactionModel.LivestreamID)
 	if err != nil {
 		return Reaction{}, err
 	}
