@@ -200,34 +200,51 @@ func searchLivestreamsHandler(c echo.Context) error {
 			return c.JSON(http.StatusOK, []Livestream{})
 		}
 
-		query, params, err := sqlx.In("SELECT * FROM livestream_tags WHERE tag_id IN (?) ORDER BY livestream_id DESC", tagIDList)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to construct IN query: "+err.Error())
-		}
-		keyTaggedLivestreams := make([]*LivestreamTagModel, 0, len(tagIDList))
-		if err := dbConn.SelectContext(ctx, &keyTaggedLivestreams, dbConn.Rebind(query), params...); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get keyTaggedLivestreams: "+err.Error())
-		}
-
-		if len(keyTaggedLivestreams) > 0 {
-			livestreamIDs := make([]int64, 0, len(keyTaggedLivestreams))
-			for _, keyTaggedLivestream := range keyTaggedLivestreams {
-				livestreamIDs = append(livestreamIDs, keyTaggedLivestream.LivestreamID)
+		limitParam := c.QueryParam("limit")
+		if limitParam != "" {
+			limit, err := strconv.Atoi(limitParam)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, "limit query parameter must be integer")
 			}
-			query, params, err := sqlx.In("SELECT * FROM livestreams WHERE id IN (?) ORDER BY id DESC", livestreamIDs)
+			// LIMIT in SQL: avoid scanning all tag associations when only top-N livestreams are needed.
+			query, params, err := sqlx.In(`
+				SELECT * FROM livestreams
+				WHERE id IN (
+					SELECT DISTINCT livestream_id FROM livestream_tags WHERE tag_id IN (?)
+				)
+				ORDER BY id DESC`, tagIDList)
 			if err != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, "failed to construct IN query: "+err.Error())
 			}
-			if c.QueryParam("limit") != "" {
-				limit, err := strconv.Atoi(c.QueryParam("limit"))
-				if err != nil {
-					return echo.NewHTTPError(http.StatusBadRequest, "limit query parameter must be integer")
-				}
-				query += fmt.Sprintf(" LIMIT %d", limit)
-			}
+			query += fmt.Sprintf(" LIMIT %d", limit)
 			query = dbConn.Rebind(query)
 			if err := dbConn.SelectContext(ctx, &livestreamModels, query, params...); err != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
+			}
+		} else {
+			// VisitTop tag search (no limit): two queries + literal IN — better MySQL plan than materialized subquery.
+			query, params, err := sqlx.In("SELECT * FROM livestream_tags WHERE tag_id IN (?) ORDER BY livestream_id DESC", tagIDList)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "failed to construct IN query: "+err.Error())
+			}
+			keyTaggedLivestreams := make([]*LivestreamTagModel, 0, len(tagIDList))
+			if err := dbConn.SelectContext(ctx, &keyTaggedLivestreams, dbConn.Rebind(query), params...); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get keyTaggedLivestreams: "+err.Error())
+			}
+
+			if len(keyTaggedLivestreams) > 0 {
+				livestreamIDs := make([]int64, 0, len(keyTaggedLivestreams))
+				for _, keyTaggedLivestream := range keyTaggedLivestreams {
+					livestreamIDs = append(livestreamIDs, keyTaggedLivestream.LivestreamID)
+				}
+				query, params, err := sqlx.In("SELECT * FROM livestreams WHERE id IN (?) ORDER BY id DESC", livestreamIDs)
+				if err != nil {
+					return echo.NewHTTPError(http.StatusInternalServerError, "failed to construct IN query: "+err.Error())
+				}
+				query = dbConn.Rebind(query)
+				if err := dbConn.SelectContext(ctx, &livestreamModels, query, params...); err != nil {
+					return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
+				}
 			}
 		}
 	} else {
