@@ -61,6 +61,9 @@ var (
 	statsAllLiveIDs   []int64
 
 	livestreamMaxTipLocks sync.Map // livestream_id -> *sync.Mutex
+
+	// Global SUM(livecomments.tip) for GET /api/payment (single-process; updated with other stat hooks).
+	statsPaymentTotalTips atomic.Int64
 )
 
 func livestreamMaxTipLock(livestreamID int64) *sync.Mutex {
@@ -102,6 +105,7 @@ func statsOnLivecommentPosted(ownerUserID, livestreamID int64, tip int64) {
 	ensureLivestreamStats(livestreamID).tips.Add(tip)
 	ensureUserStats(ownerUserID).comments.Add(1)
 	ensureUserStats(ownerUserID).tips.Add(tip)
+	statsPaymentTotalTips.Add(tip)
 
 	mu := livestreamMaxTipLock(livestreamID)
 	mu.Lock()
@@ -139,6 +143,7 @@ func statsOnModerateDeleted(ctx context.Context, livestreamID, ownerUserID int64
 	ensureLivestreamStats(livestreamID).tips.Add(-del.TipSum)
 	ensureUserStats(ownerUserID).comments.Add(-int64(del.Count))
 	ensureUserStats(ownerUserID).tips.Add(-del.TipSum)
+	statsPaymentTotalTips.Add(-del.TipSum)
 
 	mu := livestreamMaxTipLock(livestreamID)
 	mu.Lock()
@@ -420,9 +425,12 @@ func rebuildStatsFromDB(ctx context.Context) error {
 		SELECT livestream_id, IFNULL(SUM(tip), 0) AS tip_sum FROM livecomments GROUP BY livestream_id`); err != nil {
 		return err
 	}
+	var paymentTipTotal int64
 	for _, row := range tipByLive {
+		paymentTipTotal += row.Sum
 		ensureLivestreamStats(row.LivestreamID).tips.Store(row.Sum)
 	}
+	statsPaymentTotalTips.Store(paymentTipTotal)
 	var commentByLive []struct {
 		LivestreamID int64 `db:"livestream_id"`
 		Cnt          int64 `db:"cnt"`

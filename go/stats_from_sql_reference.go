@@ -173,3 +173,28 @@ func livestreamStatisticsFromSQL(ctx context.Context, tx *sqlx.Tx, livestreamID 
 		TotalReports:   statsRow.TotalReports,
 	}, nil
 }
+
+// paymentTotalTipsFromSQL is ground truth for GET /api/payment (global SUM(tip)).
+func paymentTotalTipsFromSQL(ctx context.Context, q readQueryer) (int64, error) {
+	var total int64
+	if err := q.GetContext(ctx, &total, "SELECT IFNULL(SUM(tip), 0) FROM livecomments"); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// paymentTotalTipsFromSQLGrouped matches rebuildStatsFromDB's per-livestream tip aggregation summed globally.
+func paymentTotalTipsFromSQLGrouped(ctx context.Context, q readQueryer) (int64, error) {
+	var rows []struct {
+		Sum int64 `db:"tip_sum"`
+	}
+	if err := q.SelectContext(ctx, &rows, `
+		SELECT IFNULL(SUM(tip), 0) AS tip_sum FROM livecomments GROUP BY livestream_id`); err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, r := range rows {
+		total += r.Sum
+	}
+	return total, nil
+}
