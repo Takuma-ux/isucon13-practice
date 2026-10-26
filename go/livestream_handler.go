@@ -413,8 +413,17 @@ func getLivestreamHandler(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "livestream_id in path must be integer")
 	}
+	lsID := int64(livestreamID)
 
-	livestreamModel, err := getLivestreamModelByID(ctx, dbConn, int64(livestreamID))
+	if cached, ok := getLivestreamFromCache(ctx, lsID); ok {
+		return c.JSON(http.StatusOK, cached)
+	}
+	if assembled, ok := assembleLivestreamFromProcessCache(ctx, lsID, nil); ok {
+		cacheLivestream(ctx, lsID, assembled)
+		return c.JSON(http.StatusOK, assembled)
+	}
+
+	livestreamModel, err := getLivestreamModelByID(ctx, dbConn, lsID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusNotFound, "not found livestream that has the given id")
 	}
