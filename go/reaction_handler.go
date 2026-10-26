@@ -92,13 +92,7 @@ func postReactionHandler(c echo.Context) error {
 		return err
 	}
 
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
-	}
-	defer tx.Rollback()
-
-	livestreamModel, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
+	livestreamModel, err := getLivestreamModelByID(ctx, dbConn, int64(livestreamID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
 	}
@@ -113,7 +107,7 @@ func postReactionHandler(c echo.Context) error {
 		CreatedAt:    time.Now().Unix(),
 	}
 
-	result, err := tx.NamedExecContext(ctx, "INSERT INTO reactions (user_id, livestream_id, emoji_name, created_at) VALUES (:user_id, :livestream_id, :emoji_name, :created_at)", reactionModel)
+	result, err := dbConn.NamedExecContext(ctx, "INSERT INTO reactions (user_id, livestream_id, emoji_name, created_at) VALUES (:user_id, :livestream_id, :emoji_name, :created_at)", reactionModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert reaction: "+err.Error())
 	}
@@ -124,11 +118,7 @@ func postReactionHandler(c echo.Context) error {
 	}
 	reactionModel.ID = reactionID
 
-	if err := tx.Commit(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
-	}
-
-	// Response fill is read-only; run after commit so the write txn is not held during owner/tag SELECTs.
+	// Response fill is read-only; run after autocommit INSERT (same as postLivecomment / enter).
 	reaction, err := fillReactionResponse(ctx, dbConn, reactionModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
