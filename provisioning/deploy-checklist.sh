@@ -14,7 +14,7 @@ cd "$ROOT"
 print_checklist() {
 	cat <<EOF
 ================================================================================
- ISUCON13 deploy checklist (competition EC2 app server)
+ ISUCON13 deploy checklist (competition EC2 — see docs/16-3-server-provisioning-handoff.md)
  Repo: $ROOT
 ================================================================================
 
@@ -23,7 +23,7 @@ print_checklist() {
       cd $ROOT && git pull
 
 ── 2. Build app ──
-  [ ] Optional PGO: capture default.pgo during bench (see go/PGO.md); file must live in go/
+  [ ] PGO: go/default.pgo (auto via go build); refresh after bench with go/scripts/rebuild-pgo-from-profile.sh (see go/PGO.md)
   [ ] Safe CPU target (unknown instance type): GOAMD64=v2 go build -o ../isupipe ./
       (see go/BUILD.md — use v3 only after confirming avx2 on the server)
   [ ] cd go && go build -o ../isupipe ./   # or your AMI's build path / systemd unit
@@ -42,23 +42,28 @@ print_checklist() {
   [ ] Restart app after env change:
       sudo systemctl restart isupipe-go
 
-── 5. Host infra (sysctl, timers, systemd limits) ──
-  [ ] Preview:  sudo INFRA_DRY_RUN=1 ./provisioning/apply.sh
-  [ ] Apply:    sudo CONFIRM_INFRA_APPLY=yes CONFIRM_MYSQL_TUNING=yes ./provisioning/apply.sh
-      (MySQL tuning needs CONFIRM_MYSQL_TUNING=yes — sizes buffer pool from THIS host's RAM)
+── 5. Host infra (sysctl, timers, systemd limits) — role-aware ──
+  [ ] 3-server: srv1/srv2 ISUCON_HOST_ROLE=app | srv3 ISUCON_HOST_ROLE=db | single VM combined
+  [ ] Preview:  sudo INFRA_DRY_RUN=1 ISUCON_HOST_ROLE=app ./provisioning/apply.sh
+  [ ] App (srv1 AND srv2, same command): \\
+        sudo CONFIRM_INFRA_APPLY=yes CONFIRM_NGINX_APPLY=yes ISUCON_HOST_ROLE=app ./provisioning/apply.sh
+  [ ] DB (srv3): \\
+        sudo CONFIRM_INFRA_APPLY=yes CONFIRM_MYSQL_TUNING=yes ISUCON_HOST_ROLE=db ./provisioning/apply.sh
+  [ ] Single VM: \\
+        sudo CONFIRM_INFRA_APPLY=yes CONFIRM_MYSQL_TUNING=yes CONFIRM_NGINX_APPLY=yes \\
+          ISUCON_HOST_ROLE=combined ./provisioning/apply.sh
+  [ ] Swappiness: srv3 vm.swappiness=1 | app hosts =10 (see provisioning/README.md)
 
 ── 6. MySQL tuning only (if step 5 skipped MySQL) ──
   [ ] Preview:  sudo MYSQL_TUNING_DRY_RUN=1 ./provisioning/apply-mysql-tuning.sh
   [ ] Apply:    sudo CONFIRM_MYSQL_TUNING=yes ./provisioning/apply-mysql-tuning.sh
   [ ] Verify:   ./provisioning/verify-mysql-tuning.sh
 
-── 7. Nginx (manual merge — not auto-copied) ──
-  [ ] Merge provisioning/nginx/nginx-main-snippet.conf into /etc/nginx/nginx.conf
-  [ ] Copy provisioning/nginx/conf.d/isucon-http-tuning.conf -> /etc/nginx/conf.d/
-  [ ] Copy provisioning/nginx/conf.d/isucon-alp-logging.conf -> /etc/nginx/conf.d/
-  [ ] Merge provisioning/nginx/isupipe.conf -> sites-enabled (vhost)
+── 7. Nginx (app hosts — automated via apply-nginx.sh when CONFIRM_NGINX_APPLY=yes) ──
+  [ ] srv1 and srv2: same apply.sh pass (step 5) installs conf.d + sites-enabled/isupipe (HTTP/2)
+  [ ] Or manual: ./provisioning/apply-nginx.sh with CONFIRM_NGINX_APPLY=yes
   [ ] Test:     sudo nginx -t
-  [ ] HTTP/2:   listen 443 ssl http2 (or nginx>=1.25.1: listen 443 ssl + http2 on;)
+  [ ] HTTP/2:   listen 443 ssl http2 in repo isupipe.conf (nginx>=1.25.1: listen 443 ssl + http2 on;)
   [ ] Reload:   sudo CONFIRM_NGINX_RELOAD=yes systemctl reload nginx
 
 ── 8. Diagnostic bench run ONLY (turn OFF after) ──
@@ -76,6 +81,15 @@ print_checklist() {
   [ ] POST /api/initialize (bench does this)
   [ ] Run bench / verify score
 
+── 9b. After bench — refresh PGO for the *next* build (app still running) ──
+  [ ] While isupipe is up and pprof listens on 127.0.0.1:6060 (tail of bench load is fine):
+      PGO_CAPTURE_SOURCE="real bench run" PGO_BENCH_TARGET="http://pipe.u.isucon.local:8080" \\
+        ./go/scripts/rebuild-pgo-from-profile.sh
+      (captures CPU profile → go/default.pgo + default.pgo.meta → rebuilds ../isupipe with -pgoprofile)
+  [ ] Commit default.pgo only if team agrees; always commit default.pgo.meta updates
+  [ ] Restart app: sudo systemctl restart isupipe-go
+  [ ] Local synthetic fallback (no bench): ./go/scripts/capture-pgo.sh — see go/PGO.md
+
 ── Quick reference ──
   provisioning/README.md
   Never run CONFIRM_MYSQL_TUNING on a dev laptop (RAM-sized buffer pool).
@@ -86,6 +100,8 @@ EOF
 
 run_preflight() {
 	echo "=== Preflight (no privileged apply) ==="
+	echo "--- mysql-pool-math ---"
+	./provisioning/scripts/test-mysql-pool-math.sh
 	echo "--- go build ---"
 	( cd go && go build -o /dev/null . )
 	echo "OK: go build"
@@ -105,8 +121,14 @@ run_preflight() {
 }
 
 run_dry_run() {
-	echo "=== Infra dry-run ==="
-	sudo INFRA_DRY_RUN=1 ./provisioning/apply.sh || true
+	echo "=== Infra dry-run (app role) ==="
+	sudo INFRA_DRY_RUN=1 ISUCON_HOST_ROLE=app ./provisioning/apply.sh || true
+	echo ""
+	echo "=== Infra dry-run (db role) ==="
+	sudo INFRA_DRY_RUN=1 ISUCON_HOST_ROLE=db ./provisioning/apply.sh || true
+	echo ""
+	echo "=== mysql-pool-math unit test ==="
+	./provisioning/scripts/test-mysql-pool-math.sh || true
 	echo ""
 	echo "=== MySQL slow log dry-run (on) ==="
 	sudo MYSQL_SLOW_LOG_DRY_RUN=1 ./provisioning/apply-mysql-slow-log.sh on || true

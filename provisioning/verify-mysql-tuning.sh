@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # Read-only check after apply on the target server. Safe on any host (queries MySQL only).
-# Confirms pool size matches computed policy (including InnoDB round-up to
-# chunk_size × instances).
+# Confirms pool size matches computed policy (cnf uses InnoDB round-up).
 set -euo pipefail
 
-mem_kb="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo)"
-pool_mb="$((mem_kb * 45 / 100 / 1024))"
-pool_mb="$((pool_mb / 128 * 128))"
-if [[ "$pool_mb" -lt 128 ]]; then
-	pool_mb=128
-fi
-requested_bytes=$((pool_mb * 1024 * 1024))
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/provisioning/lib/mysql-pool-math.sh"
+
+read -r mem_kb policy_raw_mb effective_mb < <(compute_mysql_pool_mb_triplet)
+requested_bytes=$((effective_mb * 1024 * 1024))
 
 MYSQL_USER="${ISUCON13_MYSQL_DIALCONFIG_USER:-isucon}"
 MYSQL_PASS="${ISUCON13_MYSQL_DIALCONFIG_PASSWORD:-isucon}"
@@ -23,21 +21,25 @@ read -r actual chunk instances < <(
 )
 
 granularity=$((chunk * instances))
-# InnoDB rounds requested size up to a multiple of (chunk_size * instances).
-effective_bytes=$(( (requested_bytes + granularity - 1) / granularity * granularity ))
 
-echo "MemTotal=${mem_kb}kB policy_requested=${pool_mb}M (${requested_bytes} bytes)"
+echo "MemTotal=${mem_kb}kB policy_raw=${policy_raw_mb}M effective_cnf=${effective_mb}M (${requested_bytes} bytes)"
 echo "@@innodb_buffer_pool_chunk_size=${chunk} @@innodb_buffer_pool_instances=${instances} granularity=${granularity} bytes"
-echo "effective_expected=${effective_bytes} bytes (after InnoDB round-up)"
 echo "@@innodb_buffer_pool_size=${actual} bytes"
 
-if [[ "$actual" -eq "$effective_bytes" ]]; then
-	echo "OK: live buffer pool matches policy after InnoDB rounding"
-elif [[ "$actual" -ge "$requested_bytes" && "$actual" -lt "$((requested_bytes + granularity))" ]]; then
-	echo "OK: live buffer pool within one rounding increment of requested size"
+if [[ "$actual" -eq "$requested_bytes" ]]; then
+	echo "OK: live buffer pool matches effective cnf value (InnoDB round-up applied at provision time)"
 else
-	echo "MISMATCH: expected ~${effective_bytes}, got ${actual}" >&2
+	echo "MISMATCH: expected ${requested_bytes}, got ${actual}" >&2
+	echo "Hint: re-run apply-mysql-tuning on this host or check manual overrides." >&2
 	exit 1
+fi
+
+if [[ "$effective_mb" -lt "$policy_raw_mb" ]]; then
+	echo "WARN: effective < policy_raw (unexpected)" >&2
+	exit 1
+fi
+if [[ "$effective_mb" -gt "$policy_raw_mb" ]]; then
+	echo "NOTE: effective ${effective_mb}M > policy_raw ${policy_raw_mb}M (InnoDB chunk alignment — not an apply bug)"
 fi
 
 echo "--- InnoDB I/O (read-only) ---"

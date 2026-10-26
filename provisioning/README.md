@@ -1,13 +1,17 @@
-# Provisioning (ISUCON13 app server)
+# Provisioning (ISUCON13)
 
 Config in this directory is **inert** until copied or applied on the **competition EC2** host. Do not run apply scripts on a developer laptop except **dry-run** modes.
+
+**3-server handoff:** `docs/16-3-server-provisioning-handoff.md` — roles `app` / `db` / `combined` (`ISUCON_HOST_ROLE`).
 
 ## Safety (read first)
 
 | Action | Guard |
 |--------|--------|
-| `apply.sh` (sysctl, timers, systemd drop-in) | `CONFIRM_INFRA_APPLY=yes` |
+| `apply.sh` (sysctl, timers, systemd drop-in; role-aware) | `CONFIRM_INFRA_APPLY=yes` |
 | `apply.sh` preview | `INFRA_DRY_RUN=1` (no `/etc` writes, no reloads) |
+| `apply-nginx.sh` (app/combined; HTTP/2 vhost + conf.d) | `CONFIRM_NGINX_APPLY=yes` (also set on `apply.sh` to run in same pass) |
+| Nginx apply preview | `NGINX_APPLY_DRY_RUN=1` |
 | `apply-mysql-tuning.sh` | `CONFIRM_MYSQL_TUNING=yes` or interactive `yes`; **uses this machine's RAM** |
 | MySQL preview | `MYSQL_TUNING_DRY_RUN=1` |
 | MySQL slow log (diagnostic bench) | `CONFIRM_SLOW_LOG=yes` + `apply-mysql-slow-log.sh on\|off`; preview `MYSQL_SLOW_LOG_DRY_RUN=1` |
@@ -22,6 +26,16 @@ Config in this directory is **inert** until copied or applied on the **competiti
 ### TCP BBR
 
 `apply.sh` installs `99-isucon-bbr.conf` only when `bbr` appears in `/proc/sys/net/ipv4/tcp_available_congestion_control` (typical on competition Ubuntu; often absent on minimal dev kernels). Sets `net.core.default_qdisc=fq` and `tcp_congestion_control=bbr`. Check: `sysctl net.ipv4.tcp_congestion_control`.
+
+### Sysctl / `vm.swappiness` (explicit precedence)
+
+| File | Host roles | `vm.swappiness` |
+|------|------------|-----------------|
+| `sysctl/99-isucon.conf` | all | *(not set — network only)* |
+| `sysctl/99-isucon-db.conf` | `db` only | `1` |
+| `sysctl/100-isucon-swappiness.conf` | `app`, `combined` | `10` (from `100-isucon-swappiness-app.conf`) |
+
+`apply.sh` installs one swappiness drop-in and **removes** the other role’s file. Do not hand-edit both on one host.
 
 **Never** restart MySQL or reload nginx locally to “test” tuning. Use dry-run and inspect generated config only.
 
@@ -53,7 +67,7 @@ sudo CONFIRM_NGINX_RELOAD=yes systemctl reload nginx
 
 `apply-mysql-tuning.sh` writes `/etc/mysql/mysql.conf.d/isucon-tuning.cnf` with:
 
-- `innodb_buffer_pool_size` (from MemTotal, 45% policy)
+- `innodb_buffer_pool_size` (45% of MemTotal → 128MiB steps → **round up** to InnoDB `chunk_size×instances`; see `lib/mysql-pool-math.sh`)
 - `innodb_flush_log_at_trx_commit = 2`
 - `innodb_flush_neighbors = 0` (SSD/EBS; no adjacent-page flush benefit)
 - `innodb_flush_method = O_DIRECT` (InnoDB buffer pool is primary cache; safe on competition Ubuntu **ext4** root — confirm with `findmnt /` and `@@innodb_flush_method` before apply)
@@ -114,8 +128,23 @@ Skipping atime updates reduces metadata writes on static file reads under `publi
 ## Full server apply (EC2)
 
 ```bash
-sudo INFRA_DRY_RUN=1 ./provisioning/apply.sh          # preview
-sudo CONFIRM_INFRA_APPLY=yes CONFIRM_MYSQL_TUNING=yes ./provisioning/apply.sh
+# Preview (any role)
+sudo INFRA_DRY_RUN=1 ISUCON_HOST_ROLE=app ./provisioning/apply.sh
+
+# App server (srv1 / srv2) — identical on both
+sudo CONFIRM_INFRA_APPLY=yes CONFIRM_NGINX_APPLY=yes ISUCON_HOST_ROLE=app \
+  ./provisioning/apply.sh
+sudo nginx -t && sudo CONFIRM_NGINX_RELOAD=yes systemctl reload nginx
+
+# DB server (srv3)
+sudo CONFIRM_INFRA_APPLY=yes CONFIRM_MYSQL_TUNING=yes ISUCON_HOST_ROLE=db \
+  ./provisioning/apply.sh
+
+# Single VM (stock layout)
+sudo CONFIRM_INFRA_APPLY=yes CONFIRM_MYSQL_TUNING=yes CONFIRM_NGINX_APPLY=yes \
+  ISUCON_HOST_ROLE=combined ./provisioning/apply.sh
 ```
 
-`apply.sh` sources `apply-mysql-tuning.sh`; both confirmations are required for a full run including MySQL restart.
+`apply.sh` runs MySQL tuning only on `db` / `combined`. App-only hosts skip MySQL restart.
+
+Local unit check (no MySQL): `./provisioning/scripts/test-mysql-pool-math.sh`

@@ -9,20 +9,23 @@ Go **1.20+** (this repo: **1.22**) uses `default.pgo` in the **main package dire
 
 ## Capture during a real bench run (preferred)
 
-On the **competition app server** while the official bench (or a full-strength rehearsal) is running:
+On the **competition app server**, run this **immediately after a bench** (or during the last ~30s of load) while isupipe is still up:
 
 ```bash
-# CPU profile (30s wall; run while bench load is active)
-curl -sS -o /tmp/isucon-cpu.prof \
-  'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'
+# From repo root on the app server
+PGO_CAPTURE_SOURCE="real bench run" \
+PGO_BENCH_TARGET="http://pipe.u.isucon.local:8080" \
+  ./go/scripts/rebuild-pgo-from-profile.sh
+```
 
-# Convert to compiler input (protobuf profile)
-go tool pprof -proto -output=default.pgo /tmp/isucon-cpu.prof
+One command: CPU profile from `:6060` → `go/default.pgo` → `default.pgo.meta` → `go build -o ../isupipe` with `-pgoprofile`. Then restart the app and run the **next** bench against the PGO binary.
 
-# Rebuild app on the server or copy default.pgo into go/ before CI/build
-cd /home/isucon/webapp/go   # or your checkout path
-mv default.pgo ./default.pgo
-go build -o isupipe .
+Manual equivalent:
+
+```bash
+curl -sS -o /tmp/isucon-cpu.prof 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'
+go tool pprof -proto -output=go/default.pgo /tmp/isucon-cpu.prof
+cd go && go build -o ../isupipe .
 ```
 
 Copy `default.pgo` back to your practice repo if you build off-machine.
