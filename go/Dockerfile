@@ -19,7 +19,7 @@ USER isucon
 RUN mkdir -p /home/isucon/webapp/go
 WORKDIR /home/isucon/webapp/go
 COPY --chown=isucon:isucon ./ /home/isucon/webapp/go/
-RUN go build -o isupipe .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o isupipe -ldflags "-s -w" .
 
 ENV GOPATH=/home/isucon/tmp/go
 ENV GOCACHE=/home/isucon/tmp/go/.cache
