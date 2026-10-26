@@ -73,6 +73,19 @@ func lookupTagIDsByName(ctx context.Context, name string) ([]int, error) {
 	return ids, nil
 }
 
+// tagByIDMapFromCache returns all tags keyed by id (same rows as SELECT * FROM tags WHERE id IN (...)).
+func tagByIDMapFromCache(ctx context.Context) (map[int64]Tag, error) {
+	tagsResponse, err := getCachedTags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tagByID := make(map[int64]Tag, len(tagsResponse.Tags))
+	for _, tag := range tagsResponse.Tags {
+		tagByID[tag.ID] = *tag
+	}
+	return tagByID, nil
+}
+
 func getCachedTags(ctx context.Context) (*TagsResponse, error) {
 	tagsCacheMu.RLock()
 	if tagsCache != nil {

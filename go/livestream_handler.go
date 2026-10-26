@@ -691,14 +691,15 @@ func tagsByLivestreamID(ctx context.Context, q readQueryer, livestreamIDs []int6
 	}
 	tagIDs = uniqueInt64(tagIDs)
 
-	// 旧: タグ1件ごとに SELECT * FROM tags WHERE id = ?
-	tagModels := make([]TagModel, 0, len(tagIDs))
-	if err := selectIn(ctx, q, &tagModels, "SELECT * FROM tags WHERE id IN (?)", tagIDs); err != nil {
+	// tags 行は initialize まで変わらない。GET /api/tag と同じ process キャッシュを使い IN SELECT を省く。
+	tagByID, err := tagByIDMapFromCache(ctx)
+	if err != nil {
 		return nil, err
 	}
-	tagByID := make(map[int64]TagModel, len(tagModels))
-	for _, tagModel := range tagModels {
-		tagByID[tagModel.ID] = tagModel
+	for _, tagID := range tagIDs {
+		if _, ok := tagByID[tagID]; !ok {
+			return nil, sql.ErrNoRows
+		}
 	}
 
 	tagCountByLivestream := make(map[int64]int, len(livestreamIDs))
@@ -713,15 +714,8 @@ func tagsByLivestreamID(ctx context.Context, q readQueryer, livestreamIDs []int6
 
 	// livestream_tags の id 順のまま、配信 ID ごとの配列へ足す。ここでは SQL を出さない。
 	for _, livestreamTagModel := range livestreamTagModels {
-		tagModel, ok := tagByID[livestreamTagModel.TagID]
-		if !ok {
-			// 旧 GetContext が sql.ErrNoRows になる欠落と同じ失敗にする。
-			return nil, sql.ErrNoRows
-		}
-		tags[livestreamTagModel.LivestreamID] = append(tags[livestreamTagModel.LivestreamID], Tag{
-			ID:   tagModel.ID,
-			Name: tagModel.Name,
-		})
+		tag := tagByID[livestreamTagModel.TagID]
+		tags[livestreamTagModel.LivestreamID] = append(tags[livestreamTagModel.LivestreamID], tag)
 	}
 	return tags, nil
 }
