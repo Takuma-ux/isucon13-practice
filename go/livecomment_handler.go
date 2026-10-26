@@ -176,44 +176,58 @@ var (
 )
 
 func postLivecommentWithDeadlockRetry(ctx context.Context, userID int64, livestreamID int, req *PostLivecommentRequest) (Livecomment, error) {
-	var livecomment Livecomment
+	var committed postLivecommentCommitted
 	err := withMySQLDeadlockRetry(func() error {
-		lc, err := postLivecommentOnce(ctx, userID, livestreamID, req)
+		livecommentModel, livestreamModel, err := postLivecommentInsertOnce(ctx, userID, livestreamID, req)
 		if err != nil {
 			return err
 		}
-		livecomment = lc
+		committed = postLivecommentCommitted{
+			livecommentModel: livecommentModel,
+			livestreamModel:  livestreamModel,
+		}
 		return nil
 	})
 	if err != nil {
 		return Livecomment{}, err
 	}
+
+	livecomment, err := fillLivecommentResponseWithLivestream(ctx, dbConn, committed.livecommentModel, committed.livestreamModel)
+	if err != nil {
+		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentFill, err)
+	}
+	statsOnLivecommentPosted(committed.livestreamModel.UserID, int64(livestreamID), req.Tip)
 	return livecomment, nil
 }
 
-func postLivecommentOnce(ctx context.Context, userID int64, livestreamID int, req *PostLivecommentRequest) (Livecomment, error) {
+type postLivecommentCommitted struct {
+	livecommentModel LivecommentModel
+	livestreamModel  LivestreamModel
+}
+
+func postLivecommentInsertOnce(ctx context.Context, userID int64, livestreamID int, req *PostLivecommentRequest) (LivecommentModel, LivestreamModel, error) {
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
-		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentBegin, err)
+		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentBegin, err)
 	}
 	defer tx.Rollback()
 
 	livestreamModel, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return Livecomment{}, errPostLivecommentNotFound
+		return LivecommentModel{}, LivestreamModel{}, errPostLivecommentNotFound
 	}
 	if err != nil {
-		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentGetLivestream, err)
+		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentGetLivestream, err)
 	}
 
 	var ngwords []*NGWord
 	if err := tx.SelectContext(ctx, &ngwords, "SELECT id, user_id, livestream_id, word FROM ng_words WHERE user_id = ? AND livestream_id = ?", livestreamModel.UserID, livestreamModel.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentGetNGWords, err)
+		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentGetNGWords, err)
 	}
 
 	for _, ngword := range ngwords {
 		if strings.Contains(req.Comment, ngword.Word) {
-			return Livecomment{}, errPostLivecommentSpam
+			return LivecommentModel{}, LivestreamModel{}, errPostLivecommentSpam
 		}
 	}
 
@@ -228,25 +242,20 @@ func postLivecommentOnce(ctx context.Context, userID int64, livestreamID int, re
 
 	rs, err := tx.NamedExecContext(ctx, "INSERT INTO livecomments (user_id, livestream_id, comment, tip, created_at) VALUES (:user_id, :livestream_id, :comment, :tip, :created_at)", livecommentModel)
 	if err != nil {
-		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentInsert, err)
+		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentInsert, err)
 	}
 
 	livecommentID, err := rs.LastInsertId()
 	if err != nil {
-		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentLastInsertID, err)
+		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentLastInsertID, err)
 	}
 	livecommentModel.ID = livecommentID
 
-	livecomment, err := fillLivecommentResponseWithLivestream(ctx, tx, livecommentModel, livestreamModel)
-	if err != nil {
-		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentFill, err)
+	if err := tx.Commit(); err != nil {
+		return LivecommentModel{}, LivestreamModel{}, fmt.Errorf("%w: %w", errPostLivecommentCommit, err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentCommit, err)
-	}
-	statsOnLivecommentPosted(livestreamModel.UserID, int64(livestreamID), req.Tip)
-	return livecomment, nil
+	return livecommentModel, livestreamModel, nil
 }
 
 func postLivecommentHandlerError(err error) *echo.HTTPError {
@@ -598,18 +607,18 @@ func fillLivecommentsForLivestream(ctx context.Context, q readQueryer, livecomme
 
 // fillLivecommentResponseWithLivestream は POST コメント用。ハンドラが既に取得した livestream 行を
 // fillLivestreamsResponseWithOwners に渡し、livestreams の再 SELECT と owner 用の2回目 fillUsersByIDs を避ける。
-func fillLivecommentResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, livecommentModel LivecommentModel, livestreamModel LivestreamModel) (Livecomment, error) {
+func fillLivecommentResponseWithLivestream(ctx context.Context, q readQueryer, livecommentModel LivecommentModel, livestreamModel LivestreamModel) (Livecomment, error) {
 	if livecommentModel.LivestreamID != livestreamModel.ID {
 		return Livecomment{}, fmt.Errorf("livestream not found: %d", livecommentModel.LivestreamID)
 	}
 
 	userIDs := uniqueInt64([]int64{livecommentModel.UserID, livestreamModel.UserID})
-	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+	usersByID, err := fillUsersByIDs(ctx, q, userIDs)
 	if err != nil {
 		return Livecomment{}, err
 	}
 
-	livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamModel.ID}, usersByID)
+	livestreams, err := fillLivestreamsResponseWithOwners(ctx, q, []*LivestreamModel{&livestreamModel}, []int64{livestreamModel.ID}, usersByID)
 	if err != nil {
 		return Livecomment{}, err
 	}
