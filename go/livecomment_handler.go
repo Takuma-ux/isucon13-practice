@@ -640,7 +640,7 @@ func fillLivecommentResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, liv
 // fillLivecommentReportsResponse は GET 通報一覧用。
 // 通報者・コメント投稿者・配信者の user ID をまとめて fillUsersByIDs し、
 // まとめ fill 経由の2回目の users/themes/icons SELECT を避ける。
-func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportModels []*LivecommentReportModel) ([]LivecommentReport, error) {
+func fillLivecommentReportsResponse(ctx context.Context, q readQueryer, reportModels []*LivecommentReportModel) ([]LivecommentReport, error) {
 	if len(reportModels) == 0 {
 		return []LivecommentReport{}, nil
 	}
@@ -655,7 +655,7 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	livecommentIDs = uniqueInt64(livecommentIDs)
 
 	livecommentRowModels := make([]LivecommentModel, 0, len(livecommentIDs))
-	if err := selectIn(ctx, tx, &livecommentRowModels, "SELECT * FROM livecomments WHERE id IN (?)", livecommentIDs); err != nil {
+	if err := selectIn(ctx, q, &livecommentRowModels, "SELECT * FROM livecomments WHERE id IN (?)", livecommentIDs); err != nil {
 		return nil, err
 	}
 	// moderate でコメントだけ削除され livecomment_reports が残ることがある。一覧は存在するコメントだけ返す。
@@ -671,7 +671,7 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 
 	livestreamRowModels, missLivestreamIDs := livestreamModelsFromProcessCache(livestreamIDs)
 	for _, id := range missLivestreamIDs {
-		model, err := coalescedLoadLivestreamRow(ctx, tx, id)
+		model, err := coalescedLoadLivestreamRow(ctx, q, id)
 		if err != nil {
 			return nil, err
 		}
@@ -703,7 +703,7 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	}
 	userIDs = uniqueInt64(userIDs)
 
-	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+	usersByID, err := fillUsersByIDs(ctx, q, userIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -712,7 +712,7 @@ func fillLivecommentReportsResponse(ctx context.Context, tx *sqlx.Tx, reportMode
 	for i := range livestreamRowModels {
 		livestreamPtrs[i] = &livestreamRowModels[i]
 	}
-	livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, livestreamPtrs, livestreamIDs, usersByID)
+	livestreams, err := fillLivestreamsResponseWithOwners(ctx, q, livestreamPtrs, livestreamIDs, usersByID)
 	if err != nil {
 		return nil, err
 	}

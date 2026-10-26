@@ -48,12 +48,6 @@ func getReactionsHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "livestream_id in path must be integer")
 	}
 
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
-	}
-	defer tx.Rollback()
-
 	query := "SELECT * FROM reactions WHERE livestream_id = ? ORDER BY created_at DESC"
 	if c.QueryParam("limit") != "" {
 		limit, err := strconv.Atoi(c.QueryParam("limit"))
@@ -64,17 +58,13 @@ func getReactionsHandler(c echo.Context) error {
 	}
 
 	reactionModels := []ReactionModel{}
-	if err := tx.SelectContext(ctx, &reactionModels, query, livestreamID); err != nil {
+	if err := dbConn.SelectContext(ctx, &reactionModels, query, livestreamID); err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, "failed to get reactions")
 	}
 
-	reactions, err := fillReactionsForLivestream(ctx, tx, reactionModels, int64(livestreamID))
+	reactions, err := fillReactionsForLivestream(ctx, dbConn, reactionModels, int64(livestreamID))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
-	}
-
-	if err := tx.Commit(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
 
 	return c.JSON(http.StatusOK, reactions)
@@ -151,12 +141,12 @@ func postReactionHandler(c echo.Context) error {
 // fillReactionsForLivestream は GET /api/livestream/:livestream_id/reaction 用。
 // パスの livestream を1回取り、リアクション投稿者と配信者の user ID をまとめて fillUsersByIDs し、
 // fillLivestreamsResponseWithOwners 経由で2回目の owner 用 users/themes/icons SELECT を避ける。
-func fillReactionsForLivestream(ctx context.Context, tx *sqlx.Tx, reactionModels []ReactionModel, livestreamID int64) ([]Reaction, error) {
+func fillReactionsForLivestream(ctx context.Context, q readQueryer, reactionModels []ReactionModel, livestreamID int64) ([]Reaction, error) {
 	if len(reactionModels) == 0 {
 		return []Reaction{}, nil
 	}
 
-	livestreamModel, err := getLivestreamModelByID(ctx, tx, livestreamID)
+	livestreamModel, err := getLivestreamModelByID(ctx, q, livestreamID)
 	if err != nil {
 		return nil, err
 	}
@@ -168,12 +158,12 @@ func fillReactionsForLivestream(ctx context.Context, tx *sqlx.Tx, reactionModels
 	userIDs = append(userIDs, livestreamModel.UserID)
 	userIDs = uniqueInt64(userIDs)
 
-	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+	usersByID, err := fillUsersByIDs(ctx, q, userIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamID}, usersByID)
+	livestreams, err := fillLivestreamsResponseWithOwners(ctx, q, []*LivestreamModel{&livestreamModel}, []int64{livestreamID}, usersByID)
 	if err != nil {
 		return nil, err
 	}
