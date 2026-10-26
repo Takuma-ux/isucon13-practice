@@ -789,7 +789,7 @@ func fillUserResponse(ctx context.Context, q readQueryer, userModel UserModel) (
 		return *profile, nil
 	}
 
-	user, err := coalescedLoadUserProfile(ctx, q, userModel.ID)
+	user, err := coalescedLoadUserProfileFromModel(ctx, q, userModel)
 	if err != nil {
 		return User{}, err
 	}

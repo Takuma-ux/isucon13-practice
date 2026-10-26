@@ -24,24 +24,32 @@ func coalescedLoadUserProfile(ctx context.Context, q readQueryer, userID int64) 
 		return *u, nil
 	}
 
-	key := fmt.Sprintf("user:%d", userID)
+	var um userFillModel
+	if err := q.GetContext(ctx, &um, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
+		return User{}, err
+	}
+	userModel := UserModel{
+		ID:          um.ID,
+		Name:        um.Name,
+		DisplayName: um.DisplayName,
+		Description: um.Description,
+	}
+	return coalescedLoadUserProfileFromModel(ctx, q, userModel)
+}
+
+// coalescedLoadUserProfileFromModel fills theme/icon without re-SELECTing users when the row is already loaded (fillUserResponse).
+func coalescedLoadUserProfileFromModel(ctx context.Context, q readQueryer, userModel UserModel) (User, error) {
+	if u, ok := getUserProfileFromProcessCache(userModel.ID); ok {
+		return *u, nil
+	}
+
+	key := fmt.Sprintf("user:%d", userModel.ID)
 	v, err, _ := userProfileLoadFlight.Do(key, func() (interface{}, error) {
-		if u, ok := getUserProfileFromProcessCache(userID); ok {
+		if u, ok := getUserProfileFromProcessCache(userModel.ID); ok {
 			return *u, nil
 		}
 
-		fillEpoch := snapshotUserProfileCacheEpoch(userID)
-
-		var um userFillModel
-		if err := q.GetContext(ctx, &um, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
-			return nil, err
-		}
-		userModel := UserModel{
-			ID:          um.ID,
-			Name:        um.Name,
-			DisplayName: um.DisplayName,
-			Description: um.Description,
-		}
+		fillEpoch := snapshotUserProfileCacheEpoch(userModel.ID)
 
 		user, err := loadUserProfileFromDB(ctx, q, userModel)
 		if err != nil {
@@ -49,11 +57,11 @@ func coalescedLoadUserProfile(ctx context.Context, q readQueryer, userID int64) 
 		}
 
 		if userProfileCoalescedFetchDelayHook != nil {
-			userProfileCoalescedFetchDelayHook(userID)
+			userProfileCoalescedFetchDelayHook(userModel.ID)
 		}
 
 		putUserProfileCache(&user, fillEpoch)
-		if cached, ok := getUserProfileFromProcessCache(userID); ok {
+		if cached, ok := getUserProfileFromProcessCache(userModel.ID); ok {
 			return *cached, nil
 		}
 		return user, nil
