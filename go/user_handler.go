@@ -253,51 +253,52 @@ func getIconHandler(c echo.Context) error {
 	username := c.Param("username")
 	ifNoneMatch := strings.TrimSpace(c.Request().Header.Get("If-None-Match"))
 
-	const iconJoinFromUser = `
-		SELECT COALESCE(i.icon_hash, '') AS icon_hash, i.image
+	const iconHashFromUser = `
+		SELECT COALESCE(i.icon_hash, '') AS icon_hash
 		FROM users u
 		LEFT JOIN icons i ON i.user_id = u.id
 		WHERE u.name = ?`
 
-	if ifNoneMatch != "" {
-		var hashRow struct {
-			IconHash string `db:"icon_hash"`
-		}
-		err := dbConn.GetContext(ctx, &hashRow, `
-			SELECT COALESCE(i.icon_hash, '') AS icon_hash
-			FROM users u
-			LEFT JOIN icons i ON i.user_id = u.id
-			WHERE u.name = ?`, username)
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
-		}
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
-		}
-		currentHash := iconHashForUserRow(hashRow.IconHash)
-		if ifNoneMatchSatisfied(ifNoneMatch, currentHash) {
-			return c.NoContent(http.StatusNotModified)
-		}
-	}
-
-	var iconRow struct {
+	var hashRow struct {
 		IconHash string `db:"icon_hash"`
-		Image    []byte `db:"image"`
 	}
-	if err := dbConn.GetContext(ctx, &iconRow, iconJoinFromUser, username); err != nil {
+	if err := dbConn.GetContext(ctx, &hashRow, iconHashFromUser, username); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 	}
 
-	iconHash := iconHashForUserRow(iconRow.IconHash)
+	iconHash := iconHashForUserRow(hashRow.IconHash)
 	c.Response().Header().Set("ETag", iconStrongETag(iconHash))
 	c.Response().Header().Set("Cache-Control", "private, max-age=3600")
-	if len(iconRow.Image) == 0 {
-		return c.Blob(http.StatusOK, "image/jpeg", fallbackImageBytes)
+	if ifNoneMatch != "" && ifNoneMatchSatisfied(ifNoneMatch, iconHash) {
+		return c.NoContent(http.StatusNotModified)
 	}
-	return c.Blob(http.StatusOK, "image/jpeg", iconRow.Image)
+
+	if body, ok := getIconImageFromCache(iconHash); ok {
+		return c.Blob(http.StatusOK, "image/jpeg", body)
+	}
+
+	const iconImageFromUser = `
+		SELECT i.image
+		FROM users u
+		LEFT JOIN icons i ON i.user_id = u.id
+		WHERE u.name = ?`
+	var image []byte
+	if err := dbConn.GetContext(ctx, &image, iconImageFromUser, username); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
+	}
+
+	body := image
+	if len(body) == 0 {
+		body = fallbackImageBytes
+	}
+	putIconImageCache(iconHash, body)
+	return c.Blob(http.StatusOK, "image/jpeg", body)
 }
 
 func postIconHandler(c echo.Context) error {
@@ -371,6 +372,7 @@ func postUserIcon(ctx context.Context, userID int64, image []byte) (int64, error
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("failed to commit: %w", err)
 	}
+	putIconImageCache(iconHash, image)
 	if err := writeThroughUserProfileCacheFromDB(ctx, userID); err != nil {
 		return iconID, fmt.Errorf("refresh user profile cache: %w", err)
 	}

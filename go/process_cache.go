@@ -49,6 +49,8 @@ func invalidateProcessReadCaches() {
 	userProfileCache = make(map[int64]*User)
 	userProfileCacheEpoch = make(map[int64]uint64)
 	userProfileCacheMu.Unlock()
+
+	clearIconImageCache()
 }
 
 func snapshotUserProfileCacheEpoch(userID int64) uint64 {
