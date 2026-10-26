@@ -320,8 +320,18 @@ func postIconHandler(c echo.Context) error {
 		return err
 	}
 
+	var iconUpload struct {
+		iconID   int64
+		iconHash string
+	}
 	iconID, err := withMySQLDeadlockRetryInt64(func() (int64, error) {
-		return postUserIcon(ctx, userID, req.Image)
+		id, hash, err := postUserIconInsertOnce(ctx, userID, req.Image)
+		if err != nil {
+			return 0, err
+		}
+		iconUpload.iconID = id
+		iconUpload.iconHash = hash
+		return id, nil
 	})
 	if err != nil {
 		if isMySQLDeadlock(err) {
@@ -342,41 +352,61 @@ func postIconHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert new user icon: "+err.Error())
 	}
 
+	if err := finalizeUserIconUpload(ctx, userID, iconUpload.iconHash, req.Image); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to refresh user profile cache: "+err.Error())
+	}
+
 	return c.JSON(http.StatusCreated, &PostIconResponse{
 		ID: iconID,
 	})
 }
 
+// postUserIcon is the full upload path (tests). Production HTTP uses retry on insert only, then finalizeUserIconUpload.
 func postUserIcon(ctx context.Context, userID int64, image []byte) (int64, error) {
+	iconID, iconHash, err := postUserIconInsertOnce(ctx, userID, image)
+	if err != nil {
+		return 0, err
+	}
+	if err := finalizeUserIconUpload(ctx, userID, iconHash, image); err != nil {
+		return iconID, err
+	}
+	return iconID, nil
+}
+
+func postUserIconInsertOnce(ctx context.Context, userID int64, image []byte) (int64, string, error) {
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+		return 0, "", fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM icons WHERE user_id = ?", userID); err != nil {
-		return 0, fmt.Errorf("failed to delete old user icon: %w", err)
+		return 0, "", fmt.Errorf("failed to delete old user icon: %w", err)
 	}
 
 	iconHash := hashIconBytes(image)
 	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image, icon_hash) VALUES (?, ?, ?)", userID, image, iconHash)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	iconID, err := rs.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get last inserted icon id: %w", err)
+		return 0, "", fmt.Errorf("failed to get last inserted icon id: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("failed to commit: %w", err)
+		return 0, "", fmt.Errorf("failed to commit: %w", err)
 	}
+	return iconID, iconHash, nil
+}
+
+func finalizeUserIconUpload(ctx context.Context, userID int64, iconHash string, image []byte) error {
 	putIconImageCache(iconHash, image)
 	if err := writeThroughUserProfileCacheFromDB(ctx, userID); err != nil {
-		return iconID, fmt.Errorf("refresh user profile cache: %w", err)
+		return fmt.Errorf("refresh user profile cache: %w", err)
 	}
-	return iconID, nil
+	return nil
 }
 
 func loadUserProfileFromDB(ctx context.Context, q readQueryer, userModel UserModel) (User, error) {
