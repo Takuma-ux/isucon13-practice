@@ -398,22 +398,22 @@ func deleteLivecommentsHittingNgWords(ctx context.Context, tx *sqlx.Tx, livestre
 }
 
 func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngWord string) (wordID int64, del moderateDeleteStats, err error) {
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
-		return 0, del, fmt.Errorf("%w: %w", errModerateBegin, err)
-	}
-	defer tx.Rollback()
-
-	owned, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
+	ownerID, err := ownerUserIDForLivestream(ctx, dbConn, int64(livestreamID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, del, errModerateNotOwner
 	}
 	if err != nil {
 		return 0, del, fmt.Errorf("%w: %w", errModerateGetLivestreams, err)
 	}
-	if owned.UserID != userID {
+	if ownerID != userID {
 		return 0, del, errModerateNotOwner
 	}
+
+	tx, err := dbConn.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, del, fmt.Errorf("%w: %w", errModerateBegin, err)
+	}
+	defer tx.Rollback()
 
 	rs, err := tx.NamedExecContext(ctx, "INSERT INTO ng_words(user_id, livestream_id, word, created_at) VALUES (:user_id, :livestream_id, :word, :created_at)", &NGWord{
 		UserID:       userID,
@@ -438,8 +438,8 @@ func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngW
 	if err := tx.Commit(); err != nil {
 		return 0, del, fmt.Errorf("%w: %w", errModerateCommit, err)
 	}
-	invalidateNGWordsCacheForOwnerLivestream(owned.UserID, int64(livestreamID))
-	statsOnModerateDeleted(ctx, int64(livestreamID), owned.UserID, del)
+	invalidateNGWordsCacheForOwnerLivestream(ownerID, int64(livestreamID))
+	statsOnModerateDeleted(ctx, int64(livestreamID), ownerID, del)
 	return wordID, del, nil
 }
 
