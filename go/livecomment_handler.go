@@ -349,12 +349,14 @@ func reportLivecommentHandler(c echo.Context) error {
 	}
 	reportModel.ID = reportID
 
-	report, err := fillLivecommentReportResponseWithLivestream(ctx, tx, reportModel, livecommentModel, livestreamModel)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())
-	}
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+	}
+
+	// Response fill is read-only; run after commit so the write txn is not held during owner/tag SELECTs.
+	report, err := fillLivecommentReportResponseWithLivestream(ctx, dbConn, reportModel, livecommentModel, livestreamModel)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())
 	}
 	statsOnReportPosted(int64(livestreamID))
 
@@ -773,18 +775,18 @@ func fillLivecommentReportsResponse(ctx context.Context, q readQueryer, reportMo
 
 // fillLivecommentReportResponseWithLivestream は POST 通報用。ハンドラが既に取得した
 // livestream / livecomment 行を fillLivecommentResponseWithLivestream に渡し、再 SELECT を避ける。
-func fillLivecommentReportResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, reportModel LivecommentReportModel, livecommentModel LivecommentModel, livestreamModel LivestreamModel) (LivecommentReport, error) {
+func fillLivecommentReportResponseWithLivestream(ctx context.Context, q readQueryer, reportModel LivecommentReportModel, livecommentModel LivecommentModel, livestreamModel LivestreamModel) (LivecommentReport, error) {
 	if livecommentModel.LivestreamID != livestreamModel.ID {
 		return LivecommentReport{}, fmt.Errorf("livestream not found: %d", livecommentModel.LivestreamID)
 	}
 
 	userIDs := uniqueInt64([]int64{reportModel.UserID, livecommentModel.UserID, livestreamModel.UserID})
-	usersByID, err := fillUsersByIDs(ctx, tx, userIDs)
+	usersByID, err := fillUsersByIDs(ctx, q, userIDs)
 	if err != nil {
 		return LivecommentReport{}, err
 	}
 
-	livestreams, err := fillLivestreamsResponseWithOwners(ctx, tx, []*LivestreamModel{&livestreamModel}, []int64{livestreamModel.ID}, usersByID)
+	livestreams, err := fillLivestreamsResponseWithOwners(ctx, q, []*LivestreamModel{&livestreamModel}, []int64{livestreamModel.ID}, usersByID)
 	if err != nil {
 		return LivecommentReport{}, err
 	}
