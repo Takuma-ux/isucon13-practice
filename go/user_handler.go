@@ -478,6 +478,14 @@ func getMeHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, user)
 }
 
+// rollbackRegisteredUser removes a user row created for register when a post-commit step fails (e.g. pdnsutil).
+func rollbackRegisteredUser(ctx context.Context, userID int64) {
+	if _, err := dbConn.ExecContext(ctx, "DELETE FROM themes WHERE user_id = ?", userID); err != nil {
+		return
+	}
+	_, _ = dbConn.ExecContext(ctx, "DELETE FROM users WHERE id = ?", userID)
+}
+
 // ユーザ登録API
 // POST /api/register
 func registerHandler(c echo.Context) error {
@@ -532,17 +540,19 @@ func registerHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert user theme: "+err.Error())
 	}
 
+	if err := tx.Commit(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
+	}
+
+	// pdnsutil is an external side effect; do not hold a DB transaction (and pool slot) for its duration.
 	if out, err := runSubprocess(pdnsutilSubprocessTimeout, "pdnsutil", "add-record", "u.isucon.local", req.Name, "A", "0", powerDNSSubdomainAddress); err != nil {
+		rollbackRegisteredUser(ctx, userID)
 		return echo.NewHTTPError(http.StatusInternalServerError, string(out)+": "+err.Error())
 	}
 
-	user, err := fillUserResponse(ctx, tx, userModel)
+	user, err := fillUserResponse(ctx, dbConn, userModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill user: "+err.Error())
-	}
-
-	if err := tx.Commit(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
 
 	return c.JSON(http.StatusCreated, user)
