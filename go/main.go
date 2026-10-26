@@ -140,9 +140,8 @@ func initializeHandler(c echo.Context) error {
 		c.Logger().Warnf("stats rebuild after initialize failed: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to rebuild stats: "+err.Error())
 	}
-	if err := warmTagsCache(c.Request().Context()); err != nil {
-		c.Logger().Warnf("tags cache prewarm after initialize failed: %v", err)
-	}
+	// Tags: invalidateTagsCache above is sufficient. getCachedTags (GET /api/tag, search) reloads
+	// from MySQL on first use — same path as warmTagsCache. Prewarm is optional (see main startup).
 
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 	return c.JSON(http.StatusOK, InitializeResponse{

@@ -298,6 +298,14 @@ func TestInitializeResetsStatsCountersHTTP(t *testing.T) {
 		t.Fatalf("POST /api/initialize status %d body=%s", rec.Code, rec.Body.String())
 	}
 
+	// Reseed changes row ids; resolve streamer after initialize for stats/tag checks.
+	if err := dbConn.GetContext(ctx, &username, "SELECT name FROM users ORDER BY id LIMIT 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := dbConn.GetContext(ctx, &livestreamID, "SELECT id FROM livestreams ORDER BY id LIMIT 1"); err != nil {
+		t.Fatal(err)
+	}
+
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -326,6 +334,21 @@ func TestInitializeResetsStatsCountersHTTP(t *testing.T) {
 	}
 	if !reflect.DeepEqual(sqlLS, memLS) {
 		t.Fatalf("after HTTP initialize livestream stats mismatch\nsql=%+v\nmem=%+v", sqlLS, memLS)
+	}
+
+	// Initialize invalidates tags cache without prewarm; first GET must lazy-reload (see top_handler_tags_test.go).
+	e.GET("/api/tag", getTagHandler)
+	recTag := httptest.NewRecorder()
+	e.ServeHTTP(recTag, httptest.NewRequest(http.MethodGet, "/api/tag", nil))
+	if recTag.Code != http.StatusOK {
+		t.Fatalf("GET /api/tag after initialize status %d body=%s", recTag.Code, recTag.Body.String())
+	}
+	var tagsBody TagsResponse
+	if err := json.Unmarshal(recTag.Body.Bytes(), &tagsBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(tagsBody.Tags) == 0 {
+		t.Fatal("expected non-empty tags after initialize")
 	}
 }
 
