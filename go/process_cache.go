@@ -32,6 +32,16 @@ var (
 	userProfileCachePutDelayHook func(userID int64) // tests only: runs before epoch check on put
 )
 
+// cloneTags returns a non-nil copy so zero-length tags JSON-encode as [] not null.
+func cloneTags(tags []Tag) []Tag {
+	if len(tags) == 0 {
+		return []Tag{}
+	}
+	out := make([]Tag, len(tags))
+	copy(out, tags)
+	return out
+}
+
 func invalidateProcessReadCaches() {
 	livestreamShellCacheMu.Lock()
 	livestreamShellCache = make(map[int64]*LivestreamShell)
@@ -83,10 +93,6 @@ func putLivestreamShellCache(shell *LivestreamShell) {
 	if shell == nil {
 		return
 	}
-	tags := shell.Tags
-	if tags == nil {
-		tags = []Tag{}
-	}
 	stored := &LivestreamShell{
 		ID:           shell.ID,
 		OwnerUserID:  shell.OwnerUserID,
@@ -94,7 +100,7 @@ func putLivestreamShellCache(shell *LivestreamShell) {
 		Description:  shell.Description,
 		PlaylistUrl:  shell.PlaylistUrl,
 		ThumbnailUrl: shell.ThumbnailUrl,
-		Tags:         append([]Tag(nil), tags...),
+		Tags:         cloneTags(shell.Tags),
 		StartAt:      shell.StartAt,
 		EndAt:        shell.EndAt,
 		tagsResolved: shell.tagsResolved,
@@ -105,9 +111,6 @@ func putLivestreamShellCache(shell *LivestreamShell) {
 }
 
 func livestreamShellFromModel(model *LivestreamModel, tags []Tag, tagsResolved bool) *LivestreamShell {
-	if tags == nil {
-		tags = []Tag{}
-	}
 	return &LivestreamShell{
 		ID:           model.ID,
 		OwnerUserID:  model.UserID,
@@ -115,7 +118,7 @@ func livestreamShellFromModel(model *LivestreamModel, tags []Tag, tagsResolved b
 		Description:  model.Description,
 		PlaylistUrl:  model.PlaylistUrl,
 		ThumbnailUrl: model.ThumbnailUrl,
-		Tags:         append([]Tag(nil), tags...),
+		Tags:         cloneTags(tags),
 		StartAt:      model.StartAt,
 		EndAt:        model.EndAt,
 		tagsResolved: tagsResolved,
@@ -229,10 +232,6 @@ func assembleLivestreamFromProcessCache(ctx context.Context, livestreamID int64,
 	if !ok {
 		return nil, false
 	}
-	tags := shell.Tags
-	if tags == nil {
-		tags = []Tag{}
-	}
 	ls := &Livestream{
 		ID:           shell.ID,
 		Owner:        owner,
@@ -240,7 +239,7 @@ func assembleLivestreamFromProcessCache(ctx context.Context, livestreamID int64,
 		Description:  shell.Description,
 		PlaylistUrl:  shell.PlaylistUrl,
 		ThumbnailUrl: shell.ThumbnailUrl,
-		Tags:         append([]Tag(nil), tags...),
+		Tags:         cloneTags(shell.Tags),
 		StartAt:      shell.StartAt,
 		EndAt:        shell.EndAt,
 	}

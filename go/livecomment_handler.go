@@ -556,10 +556,11 @@ func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecomment
 		if len(livestreams) != 1 {
 			return nil, sql.ErrNoRows
 		}
-		livestreamPtr, ok = getLivestreamFromCache(ctx, livestreamID)
-		if !ok {
-			livestreamPtr = &livestreams[0]
+		livestream := livestreams[0]
+		if livestream.Tags == nil {
+			livestream.Tags = []Tag{}
 		}
+		livestreamPtr = &livestream
 	}
 
 	userIDs := make([]int64, 0, len(livecommentModels))
@@ -611,10 +612,11 @@ func fillLivecommentResponseWithLivestream(ctx context.Context, tx *sqlx.Tx, liv
 	if len(livestreams) != 1 {
 		return Livecomment{}, sql.ErrNoRows
 	}
-	livestreamPtr, ok := getLivestreamFromCache(ctx, livestreamModel.ID)
-	if !ok {
-		livestreamPtr = &livestreams[0]
+	livestream := livestreams[0]
+	if livestream.Tags == nil {
+		livestream.Tags = []Tag{}
 	}
+	livestreamPtr := &livestream
 
 	user, ok := usersByID[livecommentModel.UserID]
 	if !ok {
@@ -786,10 +788,11 @@ func fillLivecommentReportResponseWithLivestream(ctx context.Context, tx *sqlx.T
 		return LivecommentReport{}, sql.ErrNoRows
 	}
 
-	livestreamPtr, ok := getLivestreamFromCache(ctx, livestreamModel.ID)
-	if !ok {
-		livestreamPtr = &livestreams[0]
+	livestream := livestreams[0]
+	if livestream.Tags == nil {
+		livestream.Tags = []Tag{}
 	}
+	livestreamPtr := &livestream
 
 	return LivecommentReport{
 		ID:          reportModel.ID,
