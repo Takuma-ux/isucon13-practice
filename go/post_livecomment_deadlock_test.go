@@ -81,7 +81,7 @@ func TestPostLivecommentDeadlockRetryUnderModerateContention(t *testing.T) {
 			defer wg.Done()
 			for time.Now().Before(deadline) {
 				word := fmt.Sprintf("%s-m%d", prefix, mid)
-				_, err := moderateLivestream(ctx, streamOwner, ls, word)
+				_, _, err := moderateLivestream(ctx, streamOwner, ls, word)
 				if err == nil {
 					moderateOK.Add(1)
 				}

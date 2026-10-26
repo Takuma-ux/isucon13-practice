@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -108,6 +109,14 @@ func postReactionHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
+	livestreamModel, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
+	}
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
+	}
+
 	reactionModel := ReactionModel{
 		UserID:       int64(userID),
 		LivestreamID: int64(livestreamID),
@@ -134,6 +143,7 @@ func postReactionHandler(c echo.Context) error {
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
+	statsOnReactionPosted(livestreamModel.UserID, int64(livestreamID), req.EmojiName)
 
 	return c.JSON(http.StatusCreated, reaction)
 }

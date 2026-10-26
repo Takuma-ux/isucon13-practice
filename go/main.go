@@ -136,6 +136,10 @@ func initializeHandler(c echo.Context) error {
 	}
 	invalidateTagsCache()
 	invalidateProcessReadCaches()
+	if err := rebuildStatsFromDB(c.Request().Context()); err != nil {
+		c.Logger().Warnf("stats rebuild after initialize failed: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to rebuild stats: "+err.Error())
+	}
 	if err := warmTagsCache(c.Request().Context()); err != nil {
 		c.Logger().Warnf("tags cache prewarm after initialize failed: %v", err)
 	}
@@ -238,6 +242,12 @@ func main() {
 	}
 	defer conn.Close()
 	dbConn = conn
+
+	if err := rebuildStatsFromDB(context.Background()); err != nil {
+		e.Logger.Warnf("stats rebuild on startup failed: %v", err)
+	} else {
+		e.Logger.Info("stats counters rebuilt from database")
+	}
 
 	if err := warmTagsCache(context.Background()); err != nil {
 		e.Logger.Warnf("tags cache prewarm failed (first /api/tag will retry): %v", err)

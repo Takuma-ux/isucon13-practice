@@ -51,7 +51,7 @@ func TestSpamDeleteLoopsUntilEmpty(t *testing.T) {
 		t.Fatalf("ng_word: %v", err)
 	}
 
-	if err := deleteLivecommentsHittingNgWords(ctx, tx, ls); err != nil {
+	if _, err := deleteLivecommentsHittingNgWords(ctx, tx, ls); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
@@ -125,7 +125,7 @@ func TestSpamDeleteSecondBatchCatchesRemainder(t *testing.T) {
 		t.Fatalf("del1: %v", err)
 	}
 
-	if err := deleteLivecommentsHittingNgWords(ctx, tx, ls); err != nil {
+	if _, err := deleteLivecommentsHittingNgWords(ctx, tx, ls); err != nil {
 		t.Fatalf("delete rest: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestSpamDeleteLateInsertAfterDeletePhaseWaitsOnLocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ng_word: %v", err)
 	}
-	if err := deleteLivecommentsHittingNgWords(ctx, tx, ls); err != nil {
+	if _, err := deleteLivecommentsHittingNgWords(ctx, tx, ls); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 

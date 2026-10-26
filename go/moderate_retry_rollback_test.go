@@ -46,7 +46,7 @@ func TestModerateDeadlockRetryRollsBackNGWord(t *testing.T) {
 		t.Fatalf("rolled-back ng_word visible: before=%d mid=%d", before, mid)
 	}
 
-	wordID, err := moderateLivestream(ctx, 1, ls, word)
+	wordID, _, err := moderateLivestream(ctx, 1, ls, word)
 	if err != nil {
 		t.Fatalf("moderate: %v", err)
 	}

@@ -258,6 +258,7 @@ func postLivecommentOnce(ctx context.Context, userID int64, livestreamID int, re
 	if err := tx.Commit(); err != nil {
 		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentCommit, err)
 	}
+	statsOnLivecommentPosted(livestreamModel.UserID, int64(livestreamID), req.Tip)
 	return livecomment, nil
 }
 
@@ -359,6 +360,7 @@ func reportLivecommentHandler(c echo.Context) error {
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
+	statsOnReportPosted(int64(livestreamID))
 
 	return c.JSON(http.StatusCreated, report)
 }
@@ -367,9 +369,9 @@ const spamLivecommentDeleteBatchSize = 500
 
 // deleteLivecommentsHittingNgWords は moderate 用。当該配信の全 NG ワードにマッチするコメントを削除する。
 // 単一の広い DELETE より、id 順にバッチで FOR UPDATE → PK 削除し、ロック順序と保持時間を抑える。
-func deleteLivecommentsHittingNgWords(ctx context.Context, tx *sqlx.Tx, livestreamID int) error {
-	const selectIDs = `
-		SELECT lc.id FROM livecomments lc
+func deleteLivecommentsHittingNgWords(ctx context.Context, tx *sqlx.Tx, livestreamID int) (moderateDeleteStats, error) {
+	const selectRows = `
+		SELECT lc.id, lc.tip FROM livecomments lc
 		WHERE lc.livestream_id = ?
 		AND EXISTS (
 			SELECT 1 FROM ng_words nw
@@ -380,42 +382,55 @@ func deleteLivecommentsHittingNgWords(ctx context.Context, tx *sqlx.Tx, livestre
 		LIMIT ?
 		FOR UPDATE`
 
+	var total moderateDeleteStats
 	for {
-		var ids []int64
-		if err := tx.SelectContext(ctx, &ids, selectIDs, livestreamID, livestreamID, spamLivecommentDeleteBatchSize); err != nil {
-			return err
+		var rows []struct {
+			ID  int64 `db:"id"`
+			Tip int64 `db:"tip"`
 		}
-		if len(ids) == 0 {
-			return nil
+		if err := tx.SelectContext(ctx, &rows, selectRows, livestreamID, livestreamID, spamLivecommentDeleteBatchSize); err != nil {
+			return total, err
+		}
+		if len(rows) == 0 {
+			return total, nil
+		}
+		ids := make([]int64, len(rows))
+		for i, r := range rows {
+			ids[i] = r.ID
+			total.Count++
+			total.TipSum += r.Tip
+			if r.Tip > total.MaxDeleted {
+				total.MaxDeleted = r.Tip
+			}
 		}
 
 		query, args, err := sqlx.In("DELETE FROM livecomments WHERE id IN (?)", ids)
 		if err != nil {
-			return err
+			return total, err
 		}
 		query = tx.Rebind(query)
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return err
+			return total, err
 		}
 	}
 }
 
-func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngWord string) (wordID int64, err error) {
+func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngWord string) (wordID int64, del moderateDeleteStats, err error) {
 	tx, err := dbConn.BeginTxx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %w", errModerateBegin, err)
+		return 0, del, fmt.Errorf("%w: %w", errModerateBegin, err)
 	}
 	defer tx.Rollback()
 
 	owned, err := getLivestreamModelByID(ctx, tx, int64(livestreamID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, errModerateNotOwner
+		return 0, del, errModerateNotOwner
 	}
 	if err != nil {
-		return 0, fmt.Errorf("%w: %w", errModerateGetLivestreams, err)
+		return 0, del, fmt.Errorf("%w: %w", errModerateGetLivestreams, err)
 	}
 	if owned.UserID != userID {
-		return 0, errModerateNotOwner
+		return 0, del, errModerateNotOwner
 	}
 
 	rs, err := tx.NamedExecContext(ctx, "INSERT INTO ng_words(user_id, livestream_id, word, created_at) VALUES (:user_id, :livestream_id, :word, :created_at)", &NGWord{
@@ -425,22 +440,24 @@ func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngW
 		CreatedAt:    time.Now().Unix(),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("%w: %w", errModerateInsertNGWord, err)
+		return 0, del, fmt.Errorf("%w: %w", errModerateInsertNGWord, err)
 	}
 
 	wordID, err = rs.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("%w: %w", errModerateLastInsertID, err)
+		return 0, del, fmt.Errorf("%w: %w", errModerateLastInsertID, err)
 	}
 
-	if err := deleteLivecommentsHittingNgWords(ctx, tx, livestreamID); err != nil {
-		return 0, fmt.Errorf("%w: %w", errModerateDeleteSpam, err)
+	del, err = deleteLivecommentsHittingNgWords(ctx, tx, livestreamID)
+	if err != nil {
+		return 0, del, fmt.Errorf("%w: %w", errModerateDeleteSpam, err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("%w: %w", errModerateCommit, err)
+		return 0, del, fmt.Errorf("%w: %w", errModerateCommit, err)
 	}
-	return wordID, nil
+	statsOnModerateDeleted(ctx, int64(livestreamID), owned.UserID, del)
+	return wordID, del, nil
 }
 
 var (
@@ -481,7 +498,7 @@ func moderateHandler(c echo.Context) error {
 	var wordID int64
 	var lastErr error
 	for attempt := 0; attempt < maxMySQLDeadlockRetries; attempt++ {
-		wordID, lastErr = moderateLivestream(ctx, userID, livestreamID, req.NGWord)
+		wordID, _, lastErr = moderateLivestream(ctx, userID, livestreamID, req.NGWord)
 		if lastErr == nil {
 			return c.JSON(http.StatusCreated, map[string]interface{}{
 				"word_id": wordID,

@@ -155,6 +155,7 @@ func reserveLivestreamHandler(c echo.Context) error {
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
+	statsRegisterLivestream(livestreamID, int64(userID))
 
 	// Response fill is read-only; run after commit so reservation row locks are not held during owner/tag SELECTs.
 	readTx, err := dbConn.BeginTxx(ctx, nil)
@@ -385,6 +386,7 @@ func enterLivestreamHandler(c echo.Context) error {
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
+	statsOnEnter(int64(livestreamID))
 
 	return c.NoContent(http.StatusOK)
 }
@@ -437,6 +439,7 @@ func exitLivestream(ctx context.Context, userID int64, livestreamID int) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
+	statsOnExit(int64(livestreamID))
 	return nil
 }
 

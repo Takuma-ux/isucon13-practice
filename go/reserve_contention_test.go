@@ -221,7 +221,7 @@ func TestReserveWriteContentionWithModerateDeadlocks(t *testing.T) {
 			defer wg.Done()
 			for time.Now().Before(deadline) {
 				word := fmt.Sprintf("resmix%d-%d", mid, time.Now().UnixNano())
-				_, err := moderateLivestream(ctx, 1, ls, word)
+				_, _, err := moderateLivestream(ctx, 1, ls, word)
 				if err == nil {
 					modOK.Add(1)
 				}
