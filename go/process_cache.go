@@ -171,6 +171,18 @@ func getLivestreamModelByID(ctx context.Context, q readQueryer, livestreamID int
 	return coalescedLoadLivestreamRow(ctx, q, livestreamID)
 }
 
+// ownerUserIDForLivestream returns the stream owner user ID, using the process shell when present.
+func ownerUserIDForLivestream(ctx context.Context, q readQueryer, livestreamID int64) (int64, error) {
+	if shell, ok := getLivestreamShellFromProcessCache(livestreamID); ok {
+		return shell.OwnerUserID, nil
+	}
+	model, err := getLivestreamModelByID(ctx, q, livestreamID)
+	if err != nil {
+		return 0, err
+	}
+	return model.UserID, nil
+}
+
 func getUserProfileFromProcessCache(userID int64) (*User, bool) {
 	userProfileCacheMu.RLock()
 	u, ok := userProfileCache[userID]

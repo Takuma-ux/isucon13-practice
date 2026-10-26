@@ -458,15 +458,14 @@ func getLivecommentReportsHandler(c echo.Context) error {
 	// existence already check
 	userID := sess.Values[defaultUserIDKey].(int64)
 
-	livestreamModel, err := getLivestreamModelByID(ctx, dbConn, int64(livestreamID))
+	ownerID, err := ownerUserIDForLivestream(ctx, dbConn, int64(livestreamID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusNotFound, "not found livestream that has the given id")
 	}
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
 	}
-
-	if livestreamModel.UserID != userID {
+	if ownerID != userID {
 		return echo.NewHTTPError(http.StatusForbidden, "can't get other streamer's livecomment reports")
 	}
 
