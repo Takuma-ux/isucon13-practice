@@ -23,11 +23,7 @@ func processCacheTestDB(t *testing.T) *sqlx.DB {
 	if os.Getenv("ISUCON13_PROCESS_CACHE_TEST") != "1" {
 		t.Skip("set ISUCON13_PROCESS_CACHE_TEST=1 and run with local MySQL")
 	}
-	db, err := connectDB(nil)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	return db
+	return requireSharedIntegrationDB(t)
 }
 
 func mysqlSessionQuestions(db *sqlx.DB) (int64, error) {

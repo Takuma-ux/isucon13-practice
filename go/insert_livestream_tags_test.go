@@ -4,19 +4,13 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/labstack/echo/v4"
 )
 
 func TestInsertLivestreamTagsFiveInOneStatement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short mode")
 	}
-	db, err := connectDB(echo.New().Logger)
-	if err != nil {
-		t.Fatalf("connect db: %v", err)
-	}
-	defer db.Close()
+	db := requireSharedIntegrationDB(t)
 
 	ctx := context.Background()
 	tx, err := db.BeginTxx(ctx, nil)

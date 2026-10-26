@@ -11,13 +11,7 @@ import (
 )
 
 func tagHandlerTestDB(t *testing.T) {
-	if dbConn == nil {
-		db, err := connectDB(echo.New().Logger)
-		if err != nil {
-			t.Skipf("db unavailable: %v", err)
-		}
-		dbConn = db
-	}
+	sharedIntegrationDBOrSkip(t)
 }
 
 // Proves tag cache repopulates via getCachedTags after invalidate (initialize path).

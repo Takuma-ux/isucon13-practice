@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -176,6 +177,23 @@ func TestSustainedStatsInitializeHTTPCycles(t *testing.T) {
 	statsCounterTestDB(t)
 	ctx := context.Background()
 
+	prependFakePdnsutilToPATH(t)
+	e := echo.New()
+	e.POST("/api/initialize", initializeHandler)
+
+	postInitialize := func(cycleLabel string) {
+		req := httptest.NewRequest(http.MethodPost, "/api/initialize", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: POST /api/initialize status %d body=%s", cycleLabel, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Prior integration tests may leave extra rows; bootstrap to init.sh fixture before measuring wants.
+	postInitialize("bootstrap")
+	wantUsers, wantLives := dbEntityCounts(t, ctx)
+
 	var username string
 	var livestreamID int64
 	if err := dbConn.GetContext(ctx, &username, "SELECT name FROM users ORDER BY id LIMIT 1"); err != nil {
@@ -184,11 +202,6 @@ func TestSustainedStatsInitializeHTTPCycles(t *testing.T) {
 	if err := dbConn.GetContext(ctx, &livestreamID, "SELECT id FROM livestreams ORDER BY id LIMIT 1"); err != nil {
 		t.Fatal(err)
 	}
-	wantUsers, wantLives := dbEntityCounts(t, ctx)
-
-	prependFakePdnsutilToPATH(t)
-	e := echo.New()
-	e.POST("/api/initialize", initializeHandler)
 
 	const cycles = 10
 	var baseUsers, baseLives int
@@ -196,12 +209,7 @@ func TestSustainedStatsInitializeHTTPCycles(t *testing.T) {
 	goroStart := runtime.NumGoroutine()
 
 	for i := 0; i < cycles; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/api/initialize", nil)
-		rec := httptest.NewRecorder()
-		e.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("cycle %d: POST /api/initialize status %d body=%s", i, rec.Code, rec.Body.String())
-		}
+		postInitialize(fmt.Sprintf("cycle %d", i))
 
 		u, l, o, locks, _ := statsMapSnapshot()
 		if i == 0 {

@@ -246,6 +246,31 @@ func iconHashForUserRow(stored string) string {
 	return stored
 }
 
+// resolveUserIconHash resolves icon hash for GET /api/user/:username/icon.
+// When the epoch-guarded user profile process cache is warm (common after list/fill traffic),
+// hash comes from memory and skips the users↔icons JOIN used on cold paths.
+// Icon hash in cache is updated via writeThroughUserProfileCacheFromDB on POST icon and invalidate on epoch rules — same source as API user payloads.
+func resolveUserIconHash(ctx context.Context, username string) (userID int64, iconHash string, err error) {
+	if err := dbConn.GetContext(ctx, &userID, "SELECT id FROM users WHERE name = ?", username); err != nil {
+		return 0, "", err
+	}
+	if profile, ok := getUserProfileFromProcessCache(userID); ok {
+		return userID, iconHashForUserRow(profile.IconHash), nil
+	}
+	const iconHashFromUser = `
+		SELECT COALESCE(i.icon_hash, '') AS icon_hash
+		FROM users u
+		LEFT JOIN icons i ON i.user_id = u.id
+		WHERE u.name = ?`
+	var hashRow struct {
+		IconHash string `db:"icon_hash"`
+	}
+	if err := dbConn.GetContext(ctx, &hashRow, iconHashFromUser, username); err != nil {
+		return 0, "", err
+	}
+	return userID, iconHashForUserRow(hashRow.IconHash), nil
+}
+
 func getIconHandler(c echo.Context) error {
 	ctx := c.Request().Context()
 	ctx = withResponseCache(ctx)
@@ -253,23 +278,14 @@ func getIconHandler(c echo.Context) error {
 	username := c.Param("username")
 	ifNoneMatch := strings.TrimSpace(c.Request().Header.Get("If-None-Match"))
 
-	const iconHashFromUser = `
-		SELECT COALESCE(i.icon_hash, '') AS icon_hash
-		FROM users u
-		LEFT JOIN icons i ON i.user_id = u.id
-		WHERE u.name = ?`
-
-	var hashRow struct {
-		IconHash string `db:"icon_hash"`
-	}
-	if err := dbConn.GetContext(ctx, &hashRow, iconHashFromUser, username); err != nil {
+	userID, iconHash, err := resolveUserIconHash(ctx, username)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 	}
 
-	iconHash := iconHashForUserRow(hashRow.IconHash)
 	c.Response().Header().Set("ETag", iconStrongETag(iconHash))
 	c.Response().Header().Set("Cache-Control", "private, max-age=3600")
 	if ifNoneMatch != "" && ifNoneMatchSatisfied(ifNoneMatch, iconHash) {
@@ -280,17 +296,12 @@ func getIconHandler(c echo.Context) error {
 		return c.Blob(http.StatusOK, "image/jpeg", body)
 	}
 
-	const iconImageFromUser = `
-		SELECT i.image
-		FROM users u
-		LEFT JOIN icons i ON i.user_id = u.id
-		WHERE u.name = ?`
 	var image []byte
-	if err := dbConn.GetContext(ctx, &image, iconImageFromUser, username); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
+	if err := dbConn.GetContext(ctx, &image, "SELECT image FROM icons WHERE user_id = ?", userID); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
+		// No icons row: same as LEFT JOIN with NULL image (default avatar).
 	}
 
 	body := image

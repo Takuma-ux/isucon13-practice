@@ -15,11 +15,7 @@ func testDB(t *testing.T) *sqlx.DB {
 	if os.Getenv("ISUCON13_MODERATE_CONVERGE_TEST") != "1" {
 		t.Skip("set ISUCON13_MODERATE_CONVERGE_TEST=1")
 	}
-	db, err := connectDB(nil)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	return db
+	return requireSharedIntegrationDB(t)
 }
 
 // TestSpamDeleteLoopsUntilEmpty confirms the for { ... len(ids)==0 return } loop.

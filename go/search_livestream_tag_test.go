@@ -14,18 +14,8 @@ func TestSearchLivestreamsByTagHTTP(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short mode")
 	}
-	db, err := connectDB(echo.New().Logger)
-	if err != nil {
-		t.Skipf("db unavailable: %v", err)
-	}
-	defer db.Close()
-
-	prev := dbConn
-	dbConn = db
-	defer func() {
-		dbConn = prev
-		invalidateTagsCache()
-	}()
+	sharedIntegrationDBOrSkip(t)
+	defer invalidateTagsCache()
 	invalidateTagsCache()
 
 	e := echo.New()

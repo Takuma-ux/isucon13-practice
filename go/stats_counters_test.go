@@ -32,13 +32,7 @@ func statsCounterTestDB(t *testing.T) {
 	if os.Getenv("ISUCON13_STATS_COUNTER_TEST") != "1" {
 		t.Skip("set ISUCON13_STATS_COUNTER_TEST=1 and run with local MySQL")
 	}
-	if dbConn == nil {
-		db, err := connectDB(nil)
-		if err != nil {
-			t.Fatalf("connect: %v", err)
-		}
-		dbConn = db
-	}
+	requireSharedIntegrationDB(t)
 	ctx := context.Background()
 	if err := rebuildStatsFromDB(ctx); err != nil {
 		t.Fatalf("rebuild: %v", err)

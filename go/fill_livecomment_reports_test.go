@@ -14,11 +14,7 @@ func TestFillLivecommentReportsSkipsDeletedLivecomment(t *testing.T) {
 		t.Skip("set ISUCON13_FILL_REPORTS_TEST=1 to run")
 	}
 
-	db, err := connectDB(nil)
-	if err != nil {
-		t.Fatalf("connect db: %v", err)
-	}
-	defer db.Close()
+	db := requireSharedIntegrationDB(t)
 
 	ctx := context.Background()
 	tx, err := db.BeginTxx(ctx, nil)

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	gojson "github.com/goccy/go-json"
-	"github.com/labstack/echo/v4"
 )
 
 // echoEncode mimics echo.DefaultJSONSerializer.Serialize body (stdlib).
@@ -78,11 +77,7 @@ func TestJSONEncodingVsStdlibFromDB(t *testing.T) {
 		t.Skip("set ISUCON13_JSON_ENCODE_TEST=1 to run DB-backed JSON equivalence test")
 	}
 
-	db, err := connectDB(echo.New().Logger)
-	if err != nil {
-		t.Fatalf("connect db: %v", err)
-	}
-	defer db.Close()
+	db := requireSharedIntegrationDB(t)
 
 	ctx := context.Background()
 	tx, err := db.BeginTxx(ctx, nil)

@@ -5,8 +5,6 @@ import (
 	"context"
 	"os"
 	"testing"
-
-	"github.com/labstack/echo/v4"
 )
 
 // Pointer-shaped API mirrors (same json tags) for value-vs-pointer encode equivalence.
@@ -206,11 +204,7 @@ func TestJSONPointerEmbedFilledFromDB(t *testing.T) {
 		t.Skip("set ISUCON13_JSON_ENCODE_TEST=1 to run DB-backed pointer JSON equivalence test")
 	}
 
-	db, err := connectDB(echo.New().Logger)
-	if err != nil {
-		t.Fatalf("connect db: %v", err)
-	}
-	defer db.Close()
+	db := requireSharedIntegrationDB(t)
 
 	ctx := withResponseCache(context.Background())
 	tx, err := db.BeginTxx(ctx, nil)
