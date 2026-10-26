@@ -533,7 +533,7 @@ func moderateHandlerError(err error) *echo.HTTPError {
 
 // fillLivecommentsForLivestream は GET /api/livestream/:livestream_id/livecomment 用。
 // パスの livestream を1回取り、投稿者と配信者の user ID をまとめて fillUsersByIDs し、
-// livestreamsByIDs 経由の2回目の owner 用 users/themes/icons SELECT を避ける。
+// fillLivestreamsResponseWithOwners 経由で2回目の owner 用 users/themes/icons SELECT を避ける。
 func fillLivecommentsForLivestream(ctx context.Context, tx *sqlx.Tx, livecommentModels []LivecommentModel, livestreamID int64) ([]Livecomment, error) {
 	if len(livecommentModels) == 0 {
 		return []Livecomment{}, nil

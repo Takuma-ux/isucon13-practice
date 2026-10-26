@@ -153,8 +153,28 @@ wait "$MON_PID" 2>/dev/null || true
 
 snapshot end
 
+MID_INIT_FAILED=0
+for tag in mid1 mid2; do
+	if ! grep -qE "initialize_${tag}[[:space:]]+http=200" "$OUT_DIR/metrics.tsv" 2>/dev/null; then
+		MID_INIT_FAILED=1
+	fi
+done
+
 echo ""
+if [[ "$MID_INIT_FAILED" -eq 1 ]]; then
+	echo "========================================================================"
+	echo "WARNING: mid-run POST /api/initialize did NOT all return HTTP 200"
+	echo "========================================================================"
+	grep -E 'initialize_(mid1|mid2)[[:space:]]' "$OUT_DIR/metrics.tsv" 2>/dev/null || true
+	echo "========================================================================"
+	echo ""
+fi
 echo "Done. Artifacts: $OUT_DIR"
+if [[ "$MID_INIT_FAILED" -eq 1 ]]; then
+	echo "STATUS: COMPLETED WITH MID-INIT FAILURES (see WARNING above)"
+else
+	echo "STATUS: mid-run initialize calls OK (bootstrap + mid1 + mid2 where scheduled)"
+fi
 echo "--- metrics ---"
 column -t -s $'\t' "$OUT_DIR/metrics.tsv" 2>/dev/null || cat "$OUT_DIR/metrics.tsv"
 echo "--- loadbench tail ---"

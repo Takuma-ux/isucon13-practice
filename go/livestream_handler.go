@@ -638,57 +638,6 @@ func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestr
 	return livestreams, nil
 }
 
-// livestreamsByIDs は livestream ID の IN 取得と fillLivestreamsResponse を1回にまとめ、ID から引ける map を返す。
-// livestreamIDs に重複があっても uniqueInt64 する。
-func livestreamsByIDs(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (map[int64]Livestream, error) {
-	livestreamByID := make(map[int64]Livestream, len(livestreamIDs))
-	if len(livestreamIDs) == 0 {
-		return livestreamByID, nil
-	}
-	livestreamIDs = uniqueInt64(livestreamIDs)
-
-	missIDs := make([]int64, 0, len(livestreamIDs))
-	livestreamRowModels := make([]LivestreamModel, 0, len(livestreamIDs))
-	for _, id := range livestreamIDs {
-		if cached, ok := getLivestreamFromCache(ctx, id); ok {
-			livestreamByID[id] = *cached
-			continue
-		}
-		if assembled, ok := assembleLivestreamFromProcessCache(ctx, id, nil); ok {
-			livestreamByID[id] = *assembled
-			cacheLivestream(ctx, id, assembled)
-			continue
-		}
-		if shell, ok := getLivestreamShellFromProcessCache(id); ok {
-			livestreamRowModels = append(livestreamRowModels, livestreamModelFromShell(shell))
-			continue
-		}
-		missIDs = append(missIDs, id)
-	}
-	for _, id := range missIDs {
-		model, err := coalescedLoadLivestreamRow(ctx, tx, id)
-		if err != nil {
-			return nil, err
-		}
-		livestreamRowModels = append(livestreamRowModels, model)
-	}
-	if len(livestreamRowModels) == 0 {
-		return livestreamByID, nil
-	}
-	livestreamPtrs := make([]*LivestreamModel, len(livestreamRowModels))
-	for i := range livestreamRowModels {
-		livestreamPtrs[i] = &livestreamRowModels[i]
-	}
-	livestreams, err := fillLivestreamsResponse(ctx, tx, livestreamPtrs)
-	if err != nil {
-		return nil, err
-	}
-	for _, ls := range livestreams {
-		livestreamByID[ls.ID] = ls
-	}
-	return livestreamByID, nil
-}
-
 // fillUsersByIDs は、旧 fillLivestreamResponse 内の owner 取得と fillUserResponse（theme と icon）を user ID の IN にまとめる。
 // icons に行が無いユーザーは NoImage.jpg のハッシュを使う。
 //
@@ -814,22 +763,6 @@ type userFillModel struct {
 	Name        string `db:"name"`
 	DisplayName string `db:"display_name"`
 	Description string `db:"description"`
-}
-
-type themeFillModel struct {
-	ID       int64 `db:"id"`
-	UserID   int64 `db:"user_id"`
-	DarkMode bool  `db:"dark_mode"`
-}
-
-// iconHashModel は icons から user_id と icon_hash だけを受ける。SELECT user_id, icon_hash のスキャン先。
-//
-// @params
-//   - UserID: icons.user_id
-//   - IconHash: icons.icon_hash。行が無いユーザーはこの構造体に入らない
-type iconHashModel struct {
-	UserID   int64  `db:"user_id"`
-	IconHash string `db:"icon_hash"`
 }
 
 func uniqueInt64(ids []int64) []int64 {

@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -20,6 +21,9 @@ const (
 	hostHdr  = "u.isucon.local"
 	password = "test"
 )
+
+// errOpSkipped marks moderate/reserve picked for a non-streamer worker (no HTTP).
+var errOpSkipped = errors.New("op skipped")
 
 // Weights tuned from bench/scenario (viewer loop: heavy GET comments/reactions/icons,
 // periodic POST comment/reaction; visit_top search; streamer moderate/reserve rare).
@@ -88,9 +92,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	var ok, fail uint64
+	var ok, fail, skipped uint64
 	opOK := make([]uint64, len(opWeights))
 	opFail := make([]uint64, len(opWeights))
+	opSkip := make([]uint64, len(opWeights))
 	var latSumUs uint64
 	var latCount uint64
 
@@ -132,7 +137,10 @@ func main() {
 				elapsed := time.Since(t0)
 				atomic.AddUint64(&latSumUs, uint64(elapsed.Microseconds()))
 				atomic.AddUint64(&latCount, 1)
-				if err != nil {
+				if errors.Is(err, errOpSkipped) {
+					atomic.AddUint64(&skipped, 1)
+					atomic.AddUint64(&opSkip[opIdx], 1)
+				} else if err != nil {
 					atomic.AddUint64(&fail, 1)
 					atomic.AddUint64(&opFail[opIdx], 1)
 				} else {
@@ -158,7 +166,7 @@ func main() {
 				if lc > 0 {
 					avgMs = float64(atomic.LoadUint64(&latSumUs)) / float64(lc) / 1000.0
 				}
-				fmt.Printf("[loadbench %s] ok=%d fail=%d avg_ms=%.2f\n", elapsed.Round(time.Second), atomic.LoadUint64(&ok), atomic.LoadUint64(&fail), avgMs)
+				fmt.Printf("[loadbench %s] ok=%d fail=%d skipped=%d avg_ms=%.2f\n", elapsed.Round(time.Second), atomic.LoadUint64(&ok), atomic.LoadUint64(&fail), atomic.LoadUint64(&skipped), avgMs)
 			}
 		}
 	}()
@@ -167,12 +175,13 @@ func main() {
 	close(stop)
 	wg.Wait()
 
-	fmt.Printf("loadbench done workers=%d duration=%s ok=%d fail=%d\n", workers, duration, ok, fail)
+	fmt.Printf("loadbench done workers=%d duration=%s ok=%d fail=%d skipped=%d\n",
+		workers, duration, atomic.LoadUint64(&ok), atomic.LoadUint64(&fail), atomic.LoadUint64(&skipped))
 	for i, o := range opWeights {
-		fmt.Printf("  op %-18s ok=%d fail=%d\n", o.name, opOK[i], opFail[i])
+		fmt.Printf("  op %-18s ok=%d fail=%d skipped=%d\n", o.name, atomic.LoadUint64(&opOK[i]), atomic.LoadUint64(&opFail[i]), atomic.LoadUint64(&opSkip[i]))
 	}
-	if latCount > 0 {
-		fmt.Printf("  avg_latency_ms=%.2f\n", float64(latSumUs)/float64(latCount)/1000.0)
+	if lc := atomic.LoadUint64(&latCount); lc > 0 {
+		fmt.Printf("  avg_latency_ms=%.2f\n", float64(atomic.LoadUint64(&latSumUs))/float64(lc)/1000.0)
 	}
 }
 
@@ -233,14 +242,14 @@ func runOp(w *worker, opIdx int, reserveStart, reserveEnd int64, rng *rand.Rand)
 		return postJSON(w.client, "/api/icon", map[string]interface{}{"image": img}, http.StatusCreated)
 	case "moderate":
 		if w.username != w.streamer {
-			return nil // skip silently — only streamer can moderate
+			return errOpSkipped // only streamer can moderate
 		}
 		return postJSON(w.client, fmt.Sprintf("/api/livestream/%s/moderate", w.livestreamID), map[string]interface{}{
 			"ng_word": fmt.Sprintf("spam%d", w.seq%1000),
 		}, http.StatusCreated)
 	case "reserve":
 		if w.username != w.streamer {
-			return nil
+			return errOpSkipped
 		}
 		title := fmt.Sprintf("lb-res-%d-%d", w.id, w.seq)
 		err := postJSON(w.client, "/api/livestream/reservation", map[string]interface{}{

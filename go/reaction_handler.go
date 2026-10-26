@@ -150,7 +150,7 @@ func postReactionHandler(c echo.Context) error {
 
 // fillReactionsForLivestream は GET /api/livestream/:livestream_id/reaction 用。
 // パスの livestream を1回取り、リアクション投稿者と配信者の user ID をまとめて fillUsersByIDs し、
-// livestreamsByIDs 経由の2回目の owner 用 users/themes/icons SELECT を避ける。
+// fillLivestreamsResponseWithOwners 経由で2回目の owner 用 users/themes/icons SELECT を避ける。
 func fillReactionsForLivestream(ctx context.Context, tx *sqlx.Tx, reactionModels []ReactionModel, livestreamID int64) ([]Reaction, error) {
 	if len(reactionModels) == 0 {
 		return []Reaction{}, nil
