@@ -641,7 +641,7 @@ func loginHandler(c echo.Context) error {
 
 	userModel := UserModel{}
 	// usernameはUNIQUEなので、whereで一意に特定できる
-	if err := dbConn.GetContext(ctx, &userModel, "SELECT * FROM users WHERE name = ?", req.Username); err != nil {
+	if err := dbConn.GetContext(ctx, &userModel, "SELECT id, password FROM users WHERE name = ?", req.Username); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusUnauthorized, "invalid username or password")
 		}
