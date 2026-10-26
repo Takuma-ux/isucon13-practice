@@ -20,7 +20,7 @@ var (
 	processCacheTestLivestreamRowDBLoads atomic.Int64 // tests: count coalesced livestream row SELECTs
 )
 
-func coalescedLoadUserProfile(ctx context.Context, tx *sqlx.Tx, userID int64) (User, error) {
+func coalescedLoadUserProfile(ctx context.Context, q readQueryer, userID int64) (User, error) {
 	if u, ok := getUserProfileFromProcessCache(userID); ok {
 		return *u, nil
 	}
@@ -34,7 +34,7 @@ func coalescedLoadUserProfile(ctx context.Context, tx *sqlx.Tx, userID int64) (U
 		fillEpoch := snapshotUserProfileCacheEpoch(userID)
 
 		var um userFillModel
-		if err := tx.GetContext(ctx, &um, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
+		if err := q.GetContext(ctx, &um, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
 			return nil, err
 		}
 		userModel := UserModel{
@@ -44,7 +44,7 @@ func coalescedLoadUserProfile(ctx context.Context, tx *sqlx.Tx, userID int64) (U
 			Description: um.Description,
 		}
 
-		user, err := loadUserProfileFromDB(ctx, tx, userModel)
+		user, err := loadUserProfileFromDB(ctx, q, userModel)
 		if err != nil {
 			return nil, err
 		}

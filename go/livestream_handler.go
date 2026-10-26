@@ -196,12 +196,8 @@ func searchLivestreamsHandler(c echo.Context) error {
 	ctx = withResponseCache(ctx)
 	keyTagName := c.QueryParam("tag")
 
-	tx, err := dbConn.BeginTxx(ctx, nil)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
-	}
-	defer tx.Rollback()
-
+	// Read-only path: no transaction (same as getNgwords / payment GET). Fill uses autocommit
+	// SELECTs; no cross-statement consistency requirement beyond normal bench tolerance.
 	var livestreamModels []*LivestreamModel
 	if c.QueryParam("tag") != "" {
 		// タグによる取得
@@ -210,9 +206,6 @@ func searchLivestreamsHandler(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get tags: "+err.Error())
 		}
 		if len(tagIDList) == 0 {
-			if err := tx.Commit(); err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
-			}
 			return c.JSON(http.StatusOK, []Livestream{})
 		}
 
@@ -221,7 +214,7 @@ func searchLivestreamsHandler(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to construct IN query: "+err.Error())
 		}
 		keyTaggedLivestreams := make([]*LivestreamTagModel, 0, len(tagIDList))
-		if err := tx.SelectContext(ctx, &keyTaggedLivestreams, query, params...); err != nil {
+		if err := dbConn.SelectContext(ctx, &keyTaggedLivestreams, dbConn.Rebind(query), params...); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get keyTaggedLivestreams: "+err.Error())
 		}
 
@@ -241,8 +234,8 @@ func searchLivestreamsHandler(c echo.Context) error {
 				}
 				query += fmt.Sprintf(" LIMIT %d", limit)
 			}
-			query = tx.Rebind(query)
-			if err := tx.SelectContext(ctx, &livestreamModels, query, params...); err != nil {
+			query = dbConn.Rebind(query)
+			if err := dbConn.SelectContext(ctx, &livestreamModels, query, params...); err != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
 			}
 		}
@@ -257,18 +250,14 @@ func searchLivestreamsHandler(c echo.Context) error {
 			query += fmt.Sprintf(" LIMIT %d", limit)
 		}
 
-		if err := tx.SelectContext(ctx, &livestreamModels, query); err != nil {
+		if err := dbConn.SelectContext(ctx, &livestreamModels, query); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
 		}
 	}
 
-	livestreams, err := fillLivestreamsResponse(ctx, tx, livestreamModels)
+	livestreams, err := fillLivestreamsResponse(ctx, dbConn, livestreamModels)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livestream: "+err.Error())
-	}
-
-	if err := tx.Commit(); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	}
 
 	return c.JSON(http.StatusOK, livestreams)
@@ -548,34 +537,84 @@ func getLivecommentReportsHandler(c echo.Context) error {
 // @return
 //   - []Livestream: 引数と同じ順の API 用配信。失敗時は nil
 //   - error: owner またはタグの取得に失敗したとき
-func fillLivestreamsResponse(ctx context.Context, tx *sqlx.Tx, livestreamModels []*LivestreamModel) ([]Livestream, error) {
+func fillLivestreamsResponse(ctx context.Context, q readQueryer, livestreamModels []*LivestreamModel) ([]Livestream, error) {
 	// 戻り値の並びは引数と同じ。0件のときはこの後の IN を出さない。
 	livestreams := make([]Livestream, len(livestreamModels))
 	if len(livestreamModels) == 0 {
 		return livestreams, nil
 	}
 
-	// SQL は出さない。配信から owner の user ID と配信 ID を集めるだけ。
-	userIDs := make([]int64, 0, len(livestreamModels))
-	livestreamIDs := make([]int64, 0, len(livestreamModels))
-	for _, livestreamModel := range livestreamModels {
-		userIDs = append(userIDs, livestreamModel.UserID)
-		livestreamIDs = append(livestreamIDs, livestreamModel.ID)
+	uncachedModels := make([]*LivestreamModel, 0, len(livestreamModels))
+	uncachedIDs := make([]int64, 0, len(livestreamModels))
+	uncachedIdx := make([]int, 0, len(livestreamModels))
+	for i, livestreamModel := range livestreamModels {
+		if cached, ok := getLivestreamFromCache(ctx, livestreamModel.ID); ok {
+			livestreams[i] = *cached
+			continue
+		}
+		if assembled, ok := assembleLivestreamFromProcessCache(ctx, livestreamModel.ID, nil); ok {
+			livestreams[i] = *assembled
+			cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
+			continue
+		}
+		uncachedModels = append(uncachedModels, livestreamModel)
+		uncachedIDs = append(uncachedIDs, livestreamModel.ID)
+		uncachedIdx = append(uncachedIdx, i)
 	}
-	// 同じ owner の配信が複数あっても、users / themes / icons は1人につき1回にする。
+	if len(uncachedModels) == 0 {
+		return livestreams, nil
+	}
+
+	userIDs := make([]int64, 0, len(uncachedModels))
+	for _, livestreamModel := range uncachedModels {
+		userIDs = append(userIDs, livestreamModel.UserID)
+	}
 	userIDs = uniqueInt64(userIDs)
 
-	// 旧関数が配信ごとに出していた users、theme、icon の SELECT をまとめて取る。
-	owners, err := fillUsersByIDs(ctx, tx, userIDs)
+	owners, err := fillUsersByIDs(ctx, q, userIDs)
 	if err != nil {
 		return nil, err
 	}
-	return fillLivestreamsResponseWithOwners(ctx, tx, livestreamModels, livestreamIDs, owners)
+	return fillLivestreamsResponseUncached(ctx, q, livestreams, uncachedModels, uncachedIDs, uncachedIdx, owners)
+}
+
+// fillLivestreamsResponseUncached completes rows that missed request/process cache (tags SQL + assembly).
+func fillLivestreamsResponseUncached(ctx context.Context, q readQueryer, livestreams []Livestream, uncachedModels []*LivestreamModel, uncachedIDs []int64, uncachedIdx []int, owners map[int64]*User) ([]Livestream, error) {
+	tagsByLivestream, err := tagsByLivestreamID(ctx, q, uncachedIDs)
+	if err != nil {
+		return nil, err
+	}
+	for j, livestreamModel := range uncachedModels {
+		i := uncachedIdx[j]
+		owner, ok := owners[livestreamModel.UserID]
+		if !ok {
+			return nil, fmt.Errorf("user not found: %d", livestreamModel.UserID)
+		}
+		tags := tagsByLivestream[livestreamModel.ID]
+		if tags == nil {
+			tags = []Tag{}
+		}
+		livestreams[i] = Livestream{
+			ID:           livestreamModel.ID,
+			Owner:        owner,
+			Title:        livestreamModel.Title,
+			Tags:         tags,
+			Description:  livestreamModel.Description,
+			PlaylistUrl:  livestreamModel.PlaylistUrl,
+			ThumbnailUrl: livestreamModel.ThumbnailUrl,
+			StartAt:      livestreamModel.StartAt,
+			EndAt:        livestreamModel.EndAt,
+		}
+		putLivestreamShellCache(livestreamShellFromModel(livestreamModel, tags, true))
+		putUserProfileCache(owner, snapshotUserProfileCacheEpoch(owner.ID))
+		cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
+	}
+	return livestreams, nil
 }
 
 // fillLivestreamsResponseWithOwners は owner 用 User を既に取っているときの fillLivestreamsResponse 本体。
 // owners は配信 owner の user ID をキーに含むこと。fillUsersByIDs は呼ばない。
-func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestreamModels []*LivestreamModel, livestreamIDs []int64, owners map[int64]*User) ([]Livestream, error) {
+func fillLivestreamsResponseWithOwners(ctx context.Context, q readQueryer, livestreamModels []*LivestreamModel, livestreamIDs []int64, owners map[int64]*User) ([]Livestream, error) {
 	livestreams := make([]Livestream, len(livestreamModels))
 	if len(livestreamModels) == 0 {
 		return livestreams, nil
@@ -602,40 +641,7 @@ func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestr
 		return livestreams, nil
 	}
 
-	// 旧関数が配信ごとに出していた livestream_tags と tags の SELECT をまとめて取る。
-	tagsByLivestream, err := tagsByLivestreamID(ctx, tx, uncachedIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// 旧関数の最後と同じ構造体を、引数の順に作る。このループでは SQL を出さない。
-	for j, livestreamModel := range uncachedModels {
-		i := uncachedIdx[j]
-		owner, ok := owners[livestreamModel.UserID]
-		if !ok {
-			return nil, fmt.Errorf("user not found: %d", livestreamModel.UserID)
-		}
-		tags := tagsByLivestream[livestreamModel.ID]
-		// tagsByLivestreamID は空スライスを入れる。取りこぼしたときだけ JSON が null にならないよう [] にする。
-		if tags == nil {
-			tags = []Tag{}
-		}
-		livestreams[i] = Livestream{
-			ID:           livestreamModel.ID,
-			Owner:        owner,
-			Title:        livestreamModel.Title,
-			Tags:         tags,
-			Description:  livestreamModel.Description,
-			PlaylistUrl:  livestreamModel.PlaylistUrl,
-			ThumbnailUrl: livestreamModel.ThumbnailUrl,
-			StartAt:      livestreamModel.StartAt,
-			EndAt:        livestreamModel.EndAt,
-		}
-		putLivestreamShellCache(livestreamShellFromModel(livestreamModel, tags, true))
-		putUserProfileCache(owner, snapshotUserProfileCacheEpoch(owner.ID))
-		cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
-	}
-	return livestreams, nil
+	return fillLivestreamsResponseUncached(ctx, q, livestreams, uncachedModels, uncachedIDs, uncachedIdx, owners)
 }
 
 // fillUsersByIDs は、旧 fillLivestreamResponse 内の owner 取得と fillUserResponse（theme と icon）を user ID の IN にまとめる。
@@ -649,7 +655,7 @@ func fillLivestreamsResponseWithOwners(ctx context.Context, tx *sqlx.Tx, livestr
 // @return
 //   - map[int64]*User: user ID から API 用 User。失敗時は nil
 //   - error: user または theme が欠けているとき、または SELECT に失敗したとき
-func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int64]*User, error) {
+func fillUsersByIDs(ctx context.Context, q readQueryer, userIDs []int64) (map[int64]*User, error) {
 	users := make(map[int64]*User, len(userIDs))
 	if len(userIDs) == 0 {
 		return users, nil
@@ -673,7 +679,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 	}
 
 	for _, id := range missIDs {
-		user, err := coalescedLoadUserProfile(ctx, tx, id)
+		user, err := coalescedLoadUserProfile(ctx, q, id)
 		if err != nil {
 			return nil, err
 		}
@@ -695,7 +701,7 @@ func fillUsersByIDs(ctx context.Context, tx *sqlx.Tx, userIDs []int64) (map[int6
 // @return
 //   - map[int64][]Tag: 配信 ID からタグ配列。タグが無い配信は空スライス。失敗時は nil
 //   - error: タグ ID に対応する tags 行が無いとき、または SELECT に失敗したとき
-func tagsByLivestreamID(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64) (map[int64][]Tag, error) {
+func tagsByLivestreamID(ctx context.Context, q readQueryer, livestreamIDs []int64) (map[int64][]Tag, error) {
 	// タグが0件の配信も JSON が [] になるよう、先に空スライスを入れる。nil だと null になる。
 	tags := make(map[int64][]Tag, len(livestreamIDs))
 	for _, livestreamID := range livestreamIDs {
@@ -708,7 +714,7 @@ func tagsByLivestreamID(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64)
 	// 旧: 配信ごとに SELECT * FROM livestream_tags WHERE livestream_id = ?
 	// 今: 配信 ID を IN に渡し、紐づきを1回で取る。ORDER BY id は旧 SELECT * の主キー順に合わせる。
 	livestreamTagModels := make([]*LivestreamTagModel, 0, len(livestreamIDs))
-	if err := selectIn(ctx, tx, &livestreamTagModels, "SELECT * FROM livestream_tags WHERE livestream_id IN (?) ORDER BY id", livestreamIDs); err != nil {
+	if err := selectIn(ctx, q, &livestreamTagModels, "SELECT * FROM livestream_tags WHERE livestream_id IN (?) ORDER BY id", livestreamIDs); err != nil {
 		return nil, err
 	}
 	if len(livestreamTagModels) == 0 {
@@ -724,7 +730,7 @@ func tagsByLivestreamID(ctx context.Context, tx *sqlx.Tx, livestreamIDs []int64)
 
 	// 旧: タグ1件ごとに SELECT * FROM tags WHERE id = ?
 	tagModels := make([]TagModel, 0, len(tagIDs))
-	if err := selectIn(ctx, tx, &tagModels, "SELECT * FROM tags WHERE id IN (?)", tagIDs); err != nil {
+	if err := selectIn(ctx, q, &tagModels, "SELECT * FROM tags WHERE id IN (?)", tagIDs); err != nil {
 		return nil, err
 	}
 	tagByID := make(map[int64]TagModel, len(tagModels))
@@ -790,11 +796,11 @@ func uniqueInt64(ids []int64) []int64 {
 //
 // @return
 //   - error: SQL の組み立てか実行に失敗したとき。0件はエラーにしない
-func selectIn[T any](ctx context.Context, tx *sqlx.Tx, dest *[]T, query string, ids []int64) error {
-	q, args, err := sqlx.In(query, ids)
+func selectIn[T any](ctx context.Context, q readQueryer, dest *[]T, query string, ids []int64) error {
+	qi, args, err := sqlx.In(query, ids)
 	if err != nil {
 		return err
 	}
-	q = tx.Rebind(q)
-	return tx.SelectContext(ctx, dest, q, args...)
+	qi = q.Rebind(qi)
+	return q.SelectContext(ctx, dest, qi, args...)
 }

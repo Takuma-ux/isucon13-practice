@@ -378,14 +378,14 @@ func postUserIcon(ctx context.Context, userID int64, image []byte) (int64, error
 	return iconID, nil
 }
 
-func loadUserProfileFromDB(ctx context.Context, tx *sqlx.Tx, userModel UserModel) (User, error) {
+func loadUserProfileFromDB(ctx context.Context, q readQueryer, userModel UserModel) (User, error) {
 	themeModel := ThemeModel{}
-	if err := tx.GetContext(ctx, &themeModel, "SELECT * FROM themes WHERE user_id = ?", userModel.ID); err != nil {
+	if err := q.GetContext(ctx, &themeModel, "SELECT * FROM themes WHERE user_id = ?", userModel.ID); err != nil {
 		return User{}, err
 	}
 
 	iconHash := defaultIconHash
-	if err := tx.GetContext(ctx, &iconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", userModel.ID); err != nil {
+	if err := q.GetContext(ctx, &iconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", userModel.ID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return User{}, err
 		}
