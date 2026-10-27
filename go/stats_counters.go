@@ -98,6 +98,17 @@ func statsRegisterLivestream(livestreamID, ownerUserID int64) {
 	statsAllLiveIDs = append(statsAllLiveIDs, livestreamID)
 }
 
+// statsOnUserRegistered registers a new user in rank/name maps (POST /api/register after commit).
+// Mirrors the per-user loop in rebuildStatsFromDB; must run under statsRebuildMu like statsRegisterLivestream.
+func statsOnUserRegistered(userID int64, username string) {
+	statsRebuildMu.Lock()
+	defer statsRebuildMu.Unlock()
+	statsUsernames[username] = userID
+	statsUserNames[userID] = username
+	statsAllUserIDs = append(statsAllUserIDs, userID)
+	ensureUserStats(userID)
+}
+
 func statsOnLivecommentPosted(ownerUserID, livestreamID int64, tip int64) {
 	statsRebuildMu.RLock()
 	defer statsRebuildMu.RUnlock()

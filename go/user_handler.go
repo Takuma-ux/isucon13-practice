@@ -630,6 +630,9 @@ func registerHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, string(out)+": "+err.Error())
 	}
 
+	// Post-commit (and after pdns): user row is durable; register must appear in stats maps like rebuildStatsFromDB.
+	statsOnUserRegistered(userID, req.Name)
+
 	user, err := fillUserResponse(ctx, dbConn, userModel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill user: "+err.Error())
