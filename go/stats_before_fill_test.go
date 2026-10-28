@@ -99,3 +99,45 @@ func TestStatsUpdatedWhenPostReactionFillFails(t *testing.T) {
 		t.Fatalf("livestream reactions: got %d want %d", lsStats.reactions.Load(), baseReactions+1)
 	}
 }
+
+func TestStatsUpdatedWhenPostLivecommentReportFillFails(t *testing.T) {
+	statsCounterTestDB(t)
+	ctx := context.Background()
+
+	const ls = 999
+	ownerID := statsLiveOwners[ls]
+	if ownerID == 0 {
+		t.Fatal("missing livestream owner in stats maps")
+	}
+	lsStats := statsLivestreams[ls]
+	if lsStats == nil {
+		t.Fatal("missing livestream stats")
+	}
+	baseReports := lsStats.reports.Load()
+
+	var reporterID int64
+	var livecommentID int64
+	if err := dbConn.GetContext(ctx, &livecommentID, `SELECT id FROM livecomments WHERE livestream_id = ? ORDER BY id LIMIT 1`, ls); err != nil {
+		t.Fatalf("livecomment: %v", err)
+	}
+	if err := dbConn.GetContext(ctx, &reporterID, `SELECT id FROM users WHERE id != ? ORDER BY id LIMIT 1`, ownerID); err != nil {
+		t.Fatalf("reporter: %v", err)
+	}
+
+	postLivecommentReportFillOverride = func(context.Context, readQueryer, LivecommentReportModel, LivecommentModel, LivestreamModel) (LivecommentReport, error) {
+		return LivecommentReport{}, errors.New("test forced fill failure")
+	}
+	t.Cleanup(func() { postLivecommentReportFillOverride = nil })
+
+	_, err := postLivecommentReport(ctx, reporterID, ls, int(livecommentID))
+	if err == nil {
+		t.Fatal("expected fill failure")
+	}
+	if !strings.Contains(err.Error(), "failed to fill livecomment report") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if lsStats.reports.Load() != baseReports+1 {
+		t.Fatalf("livestream reports: got %d want %d", lsStats.reports.Load(), baseReports+1)
+	}
+}

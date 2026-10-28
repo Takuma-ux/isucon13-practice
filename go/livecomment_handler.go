@@ -96,7 +96,7 @@ func getLivecommentsHandler(c echo.Context) error {
 
 	livecomments, err := fillLivecommentsForLivestream(ctx, dbConn, livecommentModels, int64(livestreamID))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fil livecomments: "+err.Error())
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomments: "+err.Error())
 	}
 
 	return c.JSON(http.StatusOK, livecomments)
@@ -177,6 +177,9 @@ var (
 
 // postLivecommentFillOverride is set by tests to force fill failure after a successful insert.
 var postLivecommentFillOverride func(context.Context, readQueryer, LivecommentModel, LivestreamModel) (Livecomment, error)
+
+// postLivecommentReportFillOverride is set by tests to force fill failure after a successful report insert.
+var postLivecommentReportFillOverride func(context.Context, readQueryer, LivecommentReportModel, LivecommentModel, LivestreamModel) (LivecommentReport, error)
 
 func postLivecommentWithDeadlockRetry(ctx context.Context, userID int64, livestreamID int, req *PostLivecommentRequest) (Livecomment, error) {
 	var committed postLivecommentCommitted
@@ -303,50 +306,81 @@ func reportLivecommentHandler(c echo.Context) error {
 	// existence already checked
 	userID := sess.Values[defaultUserIDKey].(int64)
 
-	livestreamModel, err := getLivestreamModelByID(ctx, dbConn, int64(livestreamID))
+	report, err := postLivecommentReport(ctx, userID, livestreamID, livecommentID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
+		return echo.NewHTTPError(http.StatusNotFound, "livecomment not found")
 	}
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
+		msg := err.Error()
+		if strings.Contains(msg, "livestream not found") {
+			return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
+		}
+		if strings.Contains(msg, "failed to get livestream") {
+			return echo.NewHTTPError(http.StatusInternalServerError, msg)
+		}
+		if strings.Contains(msg, "failed to get livecomment") {
+			return echo.NewHTTPError(http.StatusInternalServerError, msg)
+		}
+		if strings.Contains(msg, "failed to insert livecomment report") {
+			return echo.NewHTTPError(http.StatusInternalServerError, msg)
+		}
+		if strings.Contains(msg, "failed to get last inserted livecomment report id") {
+			return echo.NewHTTPError(http.StatusInternalServerError, msg)
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())
+	}
+
+	return c.JSON(http.StatusCreated, report)
+}
+
+func postLivecommentReport(ctx context.Context, reporterUserID int64, livestreamID, livecommentID int) (LivecommentReport, error) {
+	livestreamModel, err := getLivestreamModelByID(ctx, dbConn, int64(livestreamID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return LivecommentReport{}, fmt.Errorf("livestream not found")
+	}
+	if err != nil {
+		return LivecommentReport{}, fmt.Errorf("failed to get livestream: %w", err)
 	}
 
 	var livecommentModel LivecommentModel
 	if err := dbConn.GetContext(ctx, &livecommentModel, "SELECT * FROM livecomments WHERE id = ?", livecommentID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "livecomment not found")
+			return LivecommentReport{}, sql.ErrNoRows
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livecomment: "+err.Error())
+		return LivecommentReport{}, fmt.Errorf("failed to get livecomment: %w", err)
 	}
 	if livecommentModel.LivestreamID != int64(livestreamID) {
-		return echo.NewHTTPError(http.StatusNotFound, "livecomment not found")
+		return LivecommentReport{}, sql.ErrNoRows
 	}
 
 	now := time.Now().Unix()
 	reportModel := LivecommentReportModel{
-		UserID:        int64(userID),
+		UserID:        reporterUserID,
 		LivestreamID:  int64(livestreamID),
 		LivecommentID: int64(livecommentID),
 		CreatedAt:     now,
 	}
 	rs, err := dbConn.NamedExecContext(ctx, "INSERT INTO livecomment_reports(user_id, livestream_id, livecomment_id, created_at) VALUES (:user_id, :livestream_id, :livecomment_id, :created_at)", &reportModel)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livecomment report: "+err.Error())
+		return LivecommentReport{}, fmt.Errorf("failed to insert livecomment report: %w", err)
 	}
 	reportID, err := rs.LastInsertId()
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted livecomment report id: "+err.Error())
+		return LivecommentReport{}, fmt.Errorf("failed to get last inserted livecomment report id: %w", err)
 	}
 	reportModel.ID = reportID
 
-	// Response fill is read-only; run after autocommit INSERT (same as postReaction / postLivecomment).
-	report, err := fillLivecommentReportResponseWithLivestream(ctx, dbConn, reportModel, livecommentModel, livestreamModel)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment report: "+err.Error())
-	}
 	statsOnReportPosted(int64(livestreamID))
 
-	return c.JSON(http.StatusCreated, report)
+	fill := fillLivecommentReportResponseWithLivestream
+	if postLivecommentReportFillOverride != nil {
+		fill = postLivecommentReportFillOverride
+	}
+	report, err := fill(ctx, dbConn, reportModel, livecommentModel, livestreamModel)
+	if err != nil {
+		return LivecommentReport{}, fmt.Errorf("failed to fill livecomment report: %w", err)
+	}
+	return report, nil
 }
 
 const spamLivecommentDeleteBatchSize = 500
