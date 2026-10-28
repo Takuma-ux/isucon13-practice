@@ -530,7 +530,7 @@ func fillLivecommentsForLivestream(ctx context.Context, q readQueryer, livecomme
 	var usersByID map[int64]*User
 	if cached, ok := getLivestreamFromCache(ctx, livestreamID); ok {
 		livestreamPtr = cached
-	} else if assembled, ok := assembleLivestreamFromProcessCache(ctx, livestreamID, nil); ok {
+	} else if assembled, ok := getAssembledLivestreamFromProcessCache(ctx, livestreamID, nil); ok {
 		livestreamPtr = assembled
 		cacheLivestream(ctx, livestreamID, livestreamPtr)
 	} else {

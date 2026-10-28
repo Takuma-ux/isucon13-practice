@@ -430,7 +430,7 @@ func getLivestreamHandler(c echo.Context) error {
 	if cached, ok := getLivestreamFromCache(ctx, lsID); ok {
 		return c.JSON(http.StatusOK, cached)
 	}
-	if assembled, ok := assembleLivestreamFromProcessCache(ctx, lsID, nil); ok {
+	if assembled, ok := getAssembledLivestreamFromProcessCache(ctx, lsID, nil); ok {
 		cacheLivestream(ctx, lsID, assembled)
 		return c.JSON(http.StatusOK, assembled)
 	}
@@ -521,7 +521,7 @@ func fillLivestreamsResponse(ctx context.Context, q readQueryer, livestreamModel
 			livestreams[i] = *cached
 			continue
 		}
-		if assembled, ok := assembleLivestreamFromProcessCache(ctx, livestreamModel.ID, nil); ok {
+		if assembled, ok := getAssembledLivestreamFromProcessCache(ctx, livestreamModel.ID, nil); ok {
 			livestreams[i] = *assembled
 			cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
 			continue
@@ -610,6 +610,7 @@ func fillLivestreamsResponseUncached(ctx context.Context, q readQueryer, livestr
 		}
 		putLivestreamShellCache(livestreamShellFromModel(livestreamModel, tags, true))
 		putUserProfileCache(owner, snapshotUserProfileCacheEpoch(owner.ID))
+		putAssembledLivestreamCache(&livestreams[i])
 		cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
 	}
 	return livestreams, nil
@@ -631,7 +632,7 @@ func fillLivestreamsResponseWithOwners(ctx context.Context, q readQueryer, lives
 			livestreams[i] = *cached
 			continue
 		}
-		if assembled, ok := assembleLivestreamFromProcessCache(ctx, livestreamModel.ID, owners); ok {
+		if assembled, ok := getAssembledLivestreamFromProcessCache(ctx, livestreamModel.ID, owners); ok {
 			livestreams[i] = *assembled
 			cacheLivestream(ctx, livestreamModel.ID, &livestreams[i])
 			continue

@@ -58,7 +58,7 @@ func getReactionsHandler(c echo.Context) error {
 
 	reactionModels := []ReactionModel{}
 	if err := dbConn.SelectContext(ctx, &reactionModels, query, livestreamID); err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "failed to get reactions")
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get reactions: "+err.Error())
 	}
 
 	reactions, err := fillReactionsForLivestream(ctx, dbConn, reactionModels, int64(livestreamID))
@@ -141,7 +141,7 @@ func fillReactionsForLivestream(ctx context.Context, q readQueryer, reactionMode
 	var usersByID map[int64]*User
 	if cached, ok := getLivestreamFromCache(ctx, livestreamID); ok {
 		livestreamPtr = cached
-	} else if assembled, ok := assembleLivestreamFromProcessCache(ctx, livestreamID, nil); ok {
+	} else if assembled, ok := getAssembledLivestreamFromProcessCache(ctx, livestreamID, nil); ok {
 		livestreamPtr = assembled
 		cacheLivestream(ctx, livestreamID, livestreamPtr)
 	} else {

@@ -20,9 +20,18 @@ type LivestreamShell struct {
 	tagsResolved bool
 }
 
+type assembledLivestreamCacheEntry struct {
+	livestream  *Livestream
+	ownerUserID int64
+	ownerEpoch  uint64 // snapshot of userProfileCacheEpoch[owner] at store time
+}
+
 var (
 	livestreamShellCacheMu sync.RWMutex
 	livestreamShellCache   = make(map[int64]*LivestreamShell)
+
+	assembledLivestreamCacheMu sync.RWMutex
+	assembledLivestreamCache   = make(map[int64]*assembledLivestreamCacheEntry)
 
 	userProfileCacheMu     sync.RWMutex
 	userProfileCache       = make(map[int64]*User)
@@ -44,6 +53,8 @@ func invalidateProcessReadCaches() {
 	livestreamShellCacheMu.Lock()
 	livestreamShellCache = make(map[int64]*LivestreamShell)
 	livestreamShellCacheMu.Unlock()
+
+	clearAssembledLivestreamCache()
 
 	userProfileCacheMu.Lock()
 	userProfileCache = make(map[int64]*User)
@@ -67,6 +78,23 @@ func invalidateUserProfileCache(userID int64) {
 	delete(userProfileCache, userID)
 	userProfileCacheEpoch[userID]++
 	userProfileCacheMu.Unlock()
+	invalidateAssembledLivestreamCacheForOwner(userID)
+}
+
+func clearAssembledLivestreamCache() {
+	assembledLivestreamCacheMu.Lock()
+	assembledLivestreamCache = make(map[int64]*assembledLivestreamCacheEntry)
+	assembledLivestreamCacheMu.Unlock()
+}
+
+func invalidateAssembledLivestreamCacheForOwner(ownerUserID int64) {
+	assembledLivestreamCacheMu.Lock()
+	for id, ent := range assembledLivestreamCache {
+		if ent != nil && ent.ownerUserID == ownerUserID {
+			delete(assembledLivestreamCache, id)
+		}
+	}
+	assembledLivestreamCacheMu.Unlock()
 }
 
 // writeThroughUserProfileCache bumps epoch (defeating in-flight stale fills) and stores the authoritative profile.
@@ -79,6 +107,7 @@ func writeThroughUserProfileCache(user *User) {
 	userProfileCacheEpoch[user.ID]++
 	userProfileCache[user.ID] = stored
 	userProfileCacheMu.Unlock()
+	invalidateAssembledLivestreamCacheForOwner(user.ID)
 }
 
 func getLivestreamShellFromProcessCache(livestreamID int64) (*LivestreamShell, bool) {
@@ -221,6 +250,52 @@ func cloneUser(u *User) *User {
 	}
 	cp := *u
 	return &cp
+}
+
+func cloneLivestream(ls *Livestream) *Livestream {
+	if ls == nil {
+		return nil
+	}
+	cp := *ls
+	if ls.Owner != nil {
+		cp.Owner = cloneUser(ls.Owner)
+	}
+	cp.Tags = cloneTags(ls.Tags)
+	return &cp
+}
+
+func putAssembledLivestreamCache(ls *Livestream) {
+	if ls == nil || ls.Owner == nil {
+		return
+	}
+	ownerID := ls.Owner.ID
+	ownerEpoch := snapshotUserProfileCacheEpoch(ownerID)
+	stored := cloneLivestream(ls)
+	assembledLivestreamCacheMu.Lock()
+	assembledLivestreamCache[ls.ID] = &assembledLivestreamCacheEntry{
+		livestream:  stored,
+		ownerUserID: ownerID,
+		ownerEpoch:  ownerEpoch,
+	}
+	assembledLivestreamCacheMu.Unlock()
+}
+
+func getAssembledLivestreamFromProcessCache(ctx context.Context, livestreamID int64, owners map[int64]*User) (*Livestream, bool) {
+	assembledLivestreamCacheMu.RLock()
+	ent := assembledLivestreamCache[livestreamID]
+	assembledLivestreamCacheMu.RUnlock()
+	if ent != nil && ent.livestream != nil {
+		if ent.ownerEpoch == snapshotUserProfileCacheEpoch(ent.ownerUserID) {
+			return cloneLivestream(ent.livestream), true
+		}
+	}
+
+	ls, ok := assembleLivestreamFromProcessCache(ctx, livestreamID, owners)
+	if !ok {
+		return nil, false
+	}
+	putAssembledLivestreamCache(ls)
+	return ls, true
 }
 
 // resolveOwnerUser returns owner for livestream assembly: owners map (current txn), then process user cache.
