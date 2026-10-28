@@ -357,6 +357,7 @@ func rebuildStatsFromDB(ctx context.Context) error {
 	statsAllUserIDs = nil
 	statsAllLiveIDs = nil
 	livestreamMaxTipLocks = sync.Map{}
+	statsPaymentTotalTips.Store(0)
 
 	var users []UserModel
 	if err := dbConn.SelectContext(ctx, &users, "SELECT id, name FROM users ORDER BY id"); err != nil {
