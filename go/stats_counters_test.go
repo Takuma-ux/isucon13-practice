@@ -330,7 +330,7 @@ func TestInitializeResetsStatsCountersHTTP(t *testing.T) {
 		t.Fatalf("after HTTP initialize livestream stats mismatch\nsql=%+v\nmem=%+v", sqlLS, memLS)
 	}
 
-	// Initialize invalidates tags cache without prewarm; first GET must lazy-reload (see top_handler_tags_test.go).
+	// Tags are prewarmed synchronously in initializeHandler; GET /api/tag should still succeed.
 	e.GET("/api/tag", getTagHandler)
 	recTag := httptest.NewRecorder()
 	e.ServeHTTP(recTag, httptest.NewRequest(http.MethodGet, "/api/tag", nil))

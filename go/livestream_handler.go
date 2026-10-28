@@ -717,6 +717,10 @@ func fillUsersByIDs(ctx context.Context, q readQueryer, userIDs []int64) (map[in
 //   - map[int64][]Tag: 配信 ID からタグ配列。タグが無い配信は空スライス。失敗時は nil
 //   - error: タグ ID に対応する tags 行が無いとき、または SELECT に失敗したとき
 func tagsByLivestreamID(ctx context.Context, q readQueryer, livestreamIDs []int64) (map[int64][]Tag, error) {
+	return coalescedTagsByLivestreamID(ctx, q, livestreamIDs)
+}
+
+func tagsByLivestreamIDLoad(ctx context.Context, q readQueryer, livestreamIDs []int64) (map[int64][]Tag, error) {
 	// タグが0件の配信も JSON が [] になるよう、先に空スライスを入れる。nil だと null になる。
 	tags := make(map[int64][]Tag, len(livestreamIDs))
 	for _, livestreamID := range livestreamIDs {

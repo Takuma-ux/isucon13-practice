@@ -142,6 +142,9 @@ func initializeHandler(c echo.Context) error {
 	if err := warmThemeCache(c.Request().Context()); err != nil {
 		c.Logger().Warnf("theme cache reload after initialize failed: %v", err)
 	}
+	if err := warmTagsCache(c.Request().Context()); err != nil {
+		c.Logger().Warnf("tags cache reload after initialize failed: %v", err)
+	}
 	// Stats must match a fresh DB before any bench load runs. The official bench blocks on initialize
 	// and aborts the attempt on non-200; returning 200 here after rebuild failure would let load run
 	// against wrong in-memory stats (worse than signaling not-ready with 500).
@@ -149,8 +152,6 @@ func initializeHandler(c echo.Context) error {
 		c.Logger().Errorf("stats rebuild after initialize failed: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to rebuild stats: "+err.Error())
 	}
-	// Tags: invalidateTagsCache above is sufficient. getCachedTags (GET /api/tag, search) reloads
-	// from MySQL on first use — same path as warmTagsCache. Prewarm is optional (see main startup).
 
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 	return c.JSON(http.StatusOK, InitializeResponse{

@@ -5,18 +5,23 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"golang.org/x/sync/singleflight"
 )
 
 var (
-	livestreamRowLoadFlight singleflight.Group
-	userProfileLoadFlight   singleflight.Group
+	livestreamRowLoadFlight  singleflight.Group
+	userProfileLoadFlight    singleflight.Group
+	livestreamTagsLoadFlight singleflight.Group
 
 	userProfileCoalescedFetchDelayHook func(userID int64) // tests: after DB read, before cache put
 
-	processCacheTestLivestreamRowDBLoads atomic.Int64 // tests: count coalesced livestream row SELECTs
+	processCacheTestLivestreamRowDBLoads  atomic.Int64 // tests: count coalesced livestream row SELECTs
+	processCacheTestLivestreamTagsDBLoads atomic.Int64 // tests: count coalesced livestream_tags SELECT batches
 )
 
 func coalescedLoadUserProfile(ctx context.Context, q readQueryer, userID int64) (User, error) {
@@ -103,4 +108,34 @@ func coalescedLoadLivestreamRow(ctx context.Context, q readQueryer, livestreamID
 		return LivestreamModel{}, err
 	}
 	return v.(LivestreamModel), nil
+}
+
+func livestreamTagsFlightKey(sortedUniqueIDs []int64) string {
+	var b strings.Builder
+	b.WriteString("lstags:")
+	for i, id := range sortedUniqueIDs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatInt(id, 10))
+	}
+	return b.String()
+}
+
+// coalescedTagsByLivestreamID deduplicates concurrent livestream_tags IN queries for the same ID set.
+func coalescedTagsByLivestreamID(ctx context.Context, q readQueryer, livestreamIDs []int64) (map[int64][]Tag, error) {
+	ids := uniqueInt64(livestreamIDs)
+	if len(ids) == 0 {
+		return tagsByLivestreamIDLoad(ctx, q, livestreamIDs)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	key := livestreamTagsFlightKey(ids)
+	v, err, _ := livestreamTagsLoadFlight.Do(key, func() (interface{}, error) {
+		processCacheTestLivestreamTagsDBLoads.Add(1)
+		return tagsByLivestreamIDLoad(ctx, q, ids)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(map[int64][]Tag), nil
 }

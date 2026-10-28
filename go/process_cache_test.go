@@ -686,6 +686,54 @@ func TestProcessCacheLivestreamSingleflightDedup(t *testing.T) {
 	}
 }
 
+// TestProcessCacheLivestreamTagsSingleflightDedup ensures concurrent tagsByLivestreamID for one stream coalesce.
+func TestProcessCacheLivestreamTagsSingleflightDedup(t *testing.T) {
+	db := processCacheTestDB(t)
+	dbConn = db
+	ctx := context.Background()
+	if err := warmTagsCache(ctx); err != nil {
+		t.Fatalf("warmTagsCache: %v", err)
+	}
+
+	var lsID int64
+	if err := db.GetContext(ctx, &lsID, "SELECT id FROM livestreams ORDER BY id LIMIT 1"); err != nil {
+		t.Fatalf("livestream id: %v", err)
+	}
+
+	const workers = 32
+	processCacheTestLivestreamTagsDBLoads.Store(0)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tx, err := db.BeginTxx(ctx, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer tx.Rollback()
+			_, err = tagsByLivestreamID(ctx, tx, []int64{lsID})
+			if err != nil {
+				errCh <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+
+	loads := processCacheTestLivestreamTagsDBLoads.Load()
+	t.Logf("concurrent cold tagsByLivestreamID x%d: coalesced livestream_tags batches=%d (want ~1)", workers, loads)
+	if loads > 2 {
+		t.Fatalf("expected ~1 coalesced livestream_tags SELECT batch, got %d", loads)
+	}
+}
+
 // TestProcessCacheSingleflightEpochDuringCoalescedUserLoad: write-through during coalesced fetch must win over stale put.
 func TestProcessCacheSingleflightEpochDuringCoalescedUserLoad(t *testing.T) {
 	db := processCacheTestDB(t)
