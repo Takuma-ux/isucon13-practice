@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo-contrib/session"
@@ -20,6 +21,9 @@ type ReactionModel struct {
 	LivestreamID int64  `db:"livestream_id"`
 	CreatedAt    int64  `db:"created_at"`
 }
+
+// postReactionFillOverride is set by tests to force fill failure after a successful insert.
+var postReactionFillOverride func(context.Context, readQueryer, ReactionModel) (Reaction, error)
 
 type Reaction struct {
 	ID         int64       `json:"id"`
@@ -92,40 +96,65 @@ func postReactionHandler(c echo.Context) error {
 		return err
 	}
 
-	livestreamModel, err := getLivestreamModelByID(ctx, dbConn, int64(livestreamID))
+	reaction, err := postReaction(ctx, userID, livestreamID, req.EmojiName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
 	}
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
+		msg := err.Error()
+		if strings.Contains(msg, "failed to get livestream") {
+			return echo.NewHTTPError(http.StatusInternalServerError, msg)
+		}
+		if strings.Contains(msg, "failed to insert reaction") {
+			return echo.NewHTTPError(http.StatusInternalServerError, msg)
+		}
+		if strings.Contains(msg, "failed to get last inserted reaction id") {
+			return echo.NewHTTPError(http.StatusInternalServerError, msg)
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
+	}
+
+	return c.JSON(http.StatusCreated, reaction)
+}
+
+func postReaction(ctx context.Context, userID int64, livestreamID int, emojiName string) (Reaction, error) {
+	livestreamModel, err := getLivestreamModelByID(ctx, dbConn, int64(livestreamID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Reaction{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return Reaction{}, fmt.Errorf("failed to get livestream: %w", err)
 	}
 
 	reactionModel := ReactionModel{
-		UserID:       int64(userID),
+		UserID:       userID,
 		LivestreamID: int64(livestreamID),
-		EmojiName:    req.EmojiName,
+		EmojiName:    emojiName,
 		CreatedAt:    time.Now().Unix(),
 	}
 
 	result, err := dbConn.NamedExecContext(ctx, "INSERT INTO reactions (user_id, livestream_id, emoji_name, created_at) VALUES (:user_id, :livestream_id, :emoji_name, :created_at)", reactionModel)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert reaction: "+err.Error())
+		return Reaction{}, fmt.Errorf("failed to insert reaction: %w", err)
 	}
 
 	reactionID, err := result.LastInsertId()
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted reaction id: "+err.Error())
+		return Reaction{}, fmt.Errorf("failed to get last inserted reaction id: %w", err)
 	}
 	reactionModel.ID = reactionID
 
-	// Response fill is read-only; run after autocommit INSERT (same as postLivecomment / enter).
-	reaction, err := fillReactionResponse(ctx, dbConn, reactionModel)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill reaction: "+err.Error())
-	}
-	statsOnReactionPosted(livestreamModel.UserID, int64(livestreamID), req.EmojiName)
+	statsOnReactionPosted(livestreamModel.UserID, int64(livestreamID), emojiName)
 
-	return c.JSON(http.StatusCreated, reaction)
+	fill := fillReactionResponse
+	if postReactionFillOverride != nil {
+		fill = postReactionFillOverride
+	}
+	reaction, err := fill(ctx, dbConn, reactionModel)
+	if err != nil {
+		return Reaction{}, fmt.Errorf("failed to fill reaction: %w", err)
+	}
+	return reaction, nil
 }
 
 // fillReactionsForLivestream は GET /api/livestream/:livestream_id/reaction 用。

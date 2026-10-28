@@ -166,16 +166,17 @@ func postLivecommentHandler(c echo.Context) error {
 }
 
 var (
-	errPostLivecommentBegin       = errors.New("post livecomment: begin")
-	errPostLivecommentNotFound    = errors.New("post livecomment: livestream not found")
+	errPostLivecommentNotFound      = errors.New("post livecomment: livestream not found")
 	errPostLivecommentGetLivestream = errors.New("post livecomment: get livestream")
-	errPostLivecommentGetNGWords  = errors.New("post livecomment: get ng words")
-	errPostLivecommentSpam        = errors.New("post livecomment: spam")
-	errPostLivecommentInsert      = errors.New("post livecomment: insert")
-	errPostLivecommentLastInsertID = errors.New("post livecomment: last insert id")
-	errPostLivecommentFill        = errors.New("post livecomment: fill")
-	errPostLivecommentCommit      = errors.New("post livecomment: commit")
+	errPostLivecommentGetNGWords    = errors.New("post livecomment: get ng words")
+	errPostLivecommentSpam          = errors.New("post livecomment: spam")
+	errPostLivecommentInsert        = errors.New("post livecomment: insert")
+	errPostLivecommentLastInsertID  = errors.New("post livecomment: last insert id")
+	errPostLivecommentFill          = errors.New("post livecomment: fill")
 )
+
+// postLivecommentFillOverride is set by tests to force fill failure after a successful insert.
+var postLivecommentFillOverride func(context.Context, readQueryer, LivecommentModel, LivestreamModel) (Livecomment, error)
 
 func postLivecommentWithDeadlockRetry(ctx context.Context, userID int64, livestreamID int, req *PostLivecommentRequest) (Livecomment, error) {
 	var committed postLivecommentCommitted
@@ -194,11 +195,16 @@ func postLivecommentWithDeadlockRetry(ctx context.Context, userID int64, livestr
 		return Livecomment{}, err
 	}
 
-	livecomment, err := fillLivecommentResponseWithLivestream(ctx, dbConn, committed.livecommentModel, committed.livestreamModel)
+	statsOnLivecommentPosted(committed.livestreamModel.UserID, int64(livestreamID), req.Tip)
+
+	fill := fillLivecommentResponseWithLivestream
+	if postLivecommentFillOverride != nil {
+		fill = postLivecommentFillOverride
+	}
+	livecomment, err := fill(ctx, dbConn, committed.livecommentModel, committed.livestreamModel)
 	if err != nil {
 		return Livecomment{}, fmt.Errorf("%w: %w", errPostLivecommentFill, err)
 	}
-	statsOnLivecommentPosted(committed.livestreamModel.UserID, int64(livestreamID), req.Tip)
 	return livecomment, nil
 }
 
@@ -256,8 +262,6 @@ func postLivecommentHandlerError(err error) *echo.HTTPError {
 		return echo.NewHTTPError(http.StatusBadRequest, "このコメントがスパム判定されました")
 	case errors.Is(err, errPostLivecommentNotFound):
 		return echo.NewHTTPError(http.StatusNotFound, "livestream not found")
-	case errors.Is(err, errPostLivecommentBegin):
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
 	case errors.Is(err, errPostLivecommentGetLivestream):
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestream: "+err.Error())
 	case errors.Is(err, errPostLivecommentGetNGWords):
@@ -268,8 +272,6 @@ func postLivecommentHandlerError(err error) *echo.HTTPError {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted livecomment id: "+err.Error())
 	case errors.Is(err, errPostLivecommentFill):
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill livecomment: "+err.Error())
-	case errors.Is(err, errPostLivecommentCommit):
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
 	default:
 		if isMySQLDeadlock(err) {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert livecomment: "+err.Error())
