@@ -22,10 +22,27 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"sort"
 	"sync"
 	"sync/atomic"
 )
+
+// statsLivestreamMaxTipFromDB, when set, replaces the MAX(tip) read (integration tests).
+var statsLivestreamMaxTipFromDB func(ctx context.Context, livestreamID int64) (int64, error)
+
+// statsModerateMaxTipRefreshFailures counts moderate-delete paths where counters were
+// decremented but max_tip could not be refreshed from DB (visible partial state).
+var statsModerateMaxTipRefreshFailures atomic.Uint64
+
+func queryLivestreamMaxTipFromDB(ctx context.Context, livestreamID int64) (int64, error) {
+	if statsLivestreamMaxTipFromDB != nil {
+		return statsLivestreamMaxTipFromDB(ctx, livestreamID)
+	}
+	var dbMax int64
+	err := dbConn.GetContext(ctx, &dbMax, "SELECT IFNULL(MAX(tip), 0) FROM livecomments WHERE livestream_id = ?", livestreamID)
+	return dbMax, err
+}
 
 type userStatCounters struct {
 	reactions atomic.Int64
@@ -163,8 +180,15 @@ func statsOnModerateDeleted(ctx context.Context, livestreamID, ownerUserID int64
 	if del.MaxDeleted < ls.maxTip {
 		return
 	}
-	var dbMax int64
-	if err := dbConn.GetContext(ctx, &dbMax, "SELECT IFNULL(MAX(tip), 0) FROM livecomments WHERE livestream_id = ?", livestreamID); err != nil {
+	dbMax, err := withMySQLDeadlockRetryInt64(func() (int64, error) {
+		return queryLivestreamMaxTipFromDB(ctx, livestreamID)
+	})
+	if err != nil {
+		statsModerateMaxTipRefreshFailures.Add(1)
+		log.Printf(
+			"ERROR [stats] livestream %d: max_tip refresh failed after moderate delete: %v; comments/tips/payment already decremented, max_tip remains %d until rebuild or /api/initialize",
+			livestreamID, err, ls.maxTip,
+		)
 		return
 	}
 	ls.maxTip = dbMax
