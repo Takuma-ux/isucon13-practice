@@ -671,6 +671,71 @@ func fillLivecommentResponseWithLivestream(ctx context.Context, q readQueryer, l
 	}, nil
 }
 
+// fillReportsLivestreamSingle resolves one livestream for GET reports (path-scoped stream).
+// Uses the same request → assembled → SQL ladder as fillLivecommentsForLivestream.
+func fillReportsLivestreamSingle(
+	ctx context.Context, q readQueryer, livestreamID int64,
+	reporterIDs []int64, livecommentModels []LivecommentModel,
+) (map[int64]*Livestream, map[int64]*User, error) {
+	var livestreamPtr *Livestream
+	var usersByID map[int64]*User
+	var err error
+
+	if cached, ok := getLivestreamFromCache(ctx, livestreamID); ok {
+		livestreamPtr = cached
+	} else if assembled, ok := getAssembledLivestreamFromProcessCache(ctx, livestreamID, nil); ok {
+		livestreamPtr = assembled
+		cacheLivestream(ctx, livestreamID, livestreamPtr)
+	} else {
+		livestreamModel, err := getLivestreamModelByID(ctx, q, livestreamID)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		userIDs := make([]int64, 0, len(livecommentModels)+len(reporterIDs)+1)
+		userIDs = append(userIDs, reporterIDs...)
+		for _, m := range livecommentModels {
+			userIDs = append(userIDs, m.UserID)
+		}
+		userIDs = append(userIDs, livestreamModel.UserID)
+		userIDs = uniqueInt64(userIDs)
+
+		usersByID, err = fillUsersByIDs(ctx, q, userIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		livestreams, err := fillLivestreamsResponseWithOwners(ctx, q, []*LivestreamModel{&livestreamModel}, []int64{livestreamID}, usersByID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(livestreams) != 1 {
+			return nil, nil, sql.ErrNoRows
+		}
+		livestream := livestreams[0]
+		if livestream.Tags == nil {
+			livestream.Tags = []Tag{}
+		}
+		livestreamPtr = &livestream
+	}
+
+	if usersByID == nil {
+		userIDs := make([]int64, 0, len(livecommentModels)+len(reporterIDs))
+		userIDs = append(userIDs, reporterIDs...)
+		for _, m := range livecommentModels {
+			userIDs = append(userIDs, m.UserID)
+		}
+		userIDs = uniqueInt64(userIDs)
+
+		usersByID, err = fillUsersByIDs(ctx, q, userIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return map[int64]*Livestream{livestreamID: livestreamPtr}, usersByID, nil
+}
+
 // fillLivecommentReportsResponse は GET 通報一覧用。
 // 通報者・コメント投稿者・配信者の user ID をまとめて fillUsersByIDs し、
 // まとめ fill 経由の2回目の users/themes/icons SELECT を避ける。
@@ -703,19 +768,73 @@ func fillLivecommentReportsResponse(ctx context.Context, q readQueryer, reportMo
 	}
 	livestreamIDs = uniqueInt64(livestreamIDs)
 
-	livestreamRowModels, missLivestreamIDs := livestreamModelsFromProcessCache(livestreamIDs)
-	livestreamRowModels, err := appendLivestreamRowsOnCacheMiss(ctx, q, livestreamRowModels, missLivestreamIDs)
-	if err != nil {
-		return nil, err
-	}
-	livestreamModelByID := make(map[int64]LivestreamModel, len(livestreamRowModels))
-	for _, ls := range livestreamRowModels {
-		livestreamModelByID[ls.ID] = ls
+	var err error
+	var (
+		livestreamByID map[int64]*Livestream
+		usersByID      map[int64]*User
+	)
+	if len(livestreamIDs) == 1 {
+		livestreamByID, usersByID, err = fillReportsLivestreamSingle(
+			ctx, q, livestreamIDs[0], reporterIDs, livecommentRowModels,
+		)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		livestreamRowModels, missLivestreamIDs := livestreamModelsFromProcessCache(livestreamIDs)
+		livestreamRowModels, err = appendLivestreamRowsOnCacheMiss(ctx, q, livestreamRowModels, missLivestreamIDs)
+		if err != nil {
+			return nil, err
+		}
+		livestreamModelByID := make(map[int64]LivestreamModel, len(livestreamRowModels))
+		for _, ls := range livestreamRowModels {
+			livestreamModelByID[ls.ID] = ls
+		}
+
+		filteredComments := make([]LivecommentModel, 0, len(livecommentRowModels))
+		for _, m := range livecommentRowModels {
+			if _, ok := livestreamModelByID[m.LivestreamID]; ok {
+				filteredComments = append(filteredComments, m)
+			}
+		}
+		if len(filteredComments) == 0 {
+			return []LivecommentReport{}, nil
+		}
+		livecommentRowModels = filteredComments
+
+		userIDs := make([]int64, 0, len(reporterIDs)+len(livecommentRowModels)+len(livestreamRowModels))
+		userIDs = append(userIDs, reporterIDs...)
+		for _, m := range livecommentRowModels {
+			userIDs = append(userIDs, m.UserID)
+		}
+		for _, ls := range livestreamRowModels {
+			userIDs = append(userIDs, ls.UserID)
+		}
+		userIDs = uniqueInt64(userIDs)
+
+		usersByID, err = fillUsersByIDs(ctx, q, userIDs)
+		if err != nil {
+			return nil, err
+		}
+
+		livestreamPtrs := make([]*LivestreamModel, len(livestreamRowModels))
+		for i := range livestreamRowModels {
+			livestreamPtrs[i] = &livestreamRowModels[i]
+		}
+		livestreams, err := fillLivestreamsResponseWithOwners(ctx, q, livestreamPtrs, livestreamIDs, usersByID)
+		if err != nil {
+			return nil, err
+		}
+		livestreamByID = make(map[int64]*Livestream, len(livestreams))
+		for i := range livestreams {
+			ls := &livestreams[i]
+			livestreamByID[ls.ID] = ls
+		}
 	}
 
 	filteredComments := make([]LivecommentModel, 0, len(livecommentRowModels))
 	for _, m := range livecommentRowModels {
-		if _, ok := livestreamModelByID[m.LivestreamID]; ok {
+		if _, ok := livestreamByID[m.LivestreamID]; ok {
 			filteredComments = append(filteredComments, m)
 		}
 	}
@@ -723,35 +842,6 @@ func fillLivecommentReportsResponse(ctx context.Context, q readQueryer, reportMo
 		return []LivecommentReport{}, nil
 	}
 	livecommentRowModels = filteredComments
-
-	userIDs := make([]int64, 0, len(reporterIDs)+len(livecommentRowModels)+len(livestreamRowModels))
-	userIDs = append(userIDs, reporterIDs...)
-	for _, m := range livecommentRowModels {
-		userIDs = append(userIDs, m.UserID)
-	}
-	for _, ls := range livestreamRowModels {
-		userIDs = append(userIDs, ls.UserID)
-	}
-	userIDs = uniqueInt64(userIDs)
-
-	usersByID, err := fillUsersByIDs(ctx, q, userIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	livestreamPtrs := make([]*LivestreamModel, len(livestreamRowModels))
-	for i := range livestreamRowModels {
-		livestreamPtrs[i] = &livestreamRowModels[i]
-	}
-	livestreams, err := fillLivestreamsResponseWithOwners(ctx, q, livestreamPtrs, livestreamIDs, usersByID)
-	if err != nil {
-		return nil, err
-	}
-	livestreamByID := make(map[int64]*Livestream, len(livestreams))
-	for i := range livestreams {
-		ls := &livestreams[i]
-		livestreamByID[ls.ID] = ls
-	}
 
 	livecommentByID := make(map[int64]Livecomment, len(livecommentRowModels))
 	for _, m := range livecommentRowModels {

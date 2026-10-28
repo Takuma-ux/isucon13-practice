@@ -145,14 +145,12 @@ func getStreamerThemeHandler(c echo.Context) error {
 
 	username := c.Param("username")
 
-	userID, ok := statsLookupUserIDByName(username)
-	if !ok {
-		if err := dbConn.GetContext(ctx, &userID, "SELECT id FROM users WHERE name = ?", username); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
-			}
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
+	userID, err := lookupUserIDByUsername(ctx, username)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
 	}
 
 	themeModel, err := themeForUser(ctx, dbConn, userID)
