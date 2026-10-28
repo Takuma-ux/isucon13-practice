@@ -250,7 +250,7 @@ func iconHashForUserRow(stored string) string {
 // resolveUserIconHash resolves icon hash for GET /api/user/:username/icon.
 // When the epoch-guarded user profile process cache is warm (common after list/fill traffic),
 // hash comes from memory and skips the users↔icons JOIN used on cold paths.
-// Icon hash in cache is updated via writeThroughUserProfileCacheFromDB on POST icon and invalidate on epoch rules — same source as API user payloads.
+// Icon hash in cache is updated via writeThroughUserProfileCacheAfterIconUpload on POST icon and invalidate on epoch rules — same source as API user payloads.
 func resolveUserIconHash(ctx context.Context, username string) (userID int64, iconHash string, err error) {
 	userID, err = lookupUserIDByUsername(ctx, username)
 	if err != nil {
@@ -414,9 +414,42 @@ func postUserIconInsertOnce(ctx context.Context, userID int64, image []byte) (in
 
 func finalizeUserIconUpload(ctx context.Context, userID int64, iconHash string, image []byte) error {
 	putIconImageCache(iconHash, image)
-	if err := writeThroughUserProfileCacheFromDB(ctx, userID); err != nil {
+	if err := writeThroughUserProfileCacheAfterIconUpload(ctx, userID, iconHash); err != nil {
 		return fmt.Errorf("refresh user profile cache: %w", err)
 	}
+	return nil
+}
+
+// writeThroughUserProfileCacheAfterIconUpload updates the process user profile after a durable icon INSERT.
+// Uses the upload's icon hash (no icons SELECT). Reuses a warm profile cache entry for user+theme fields when present.
+func writeThroughUserProfileCacheAfterIconUpload(ctx context.Context, userID int64, iconHash string) error {
+	hash := iconHashForUserRow(iconHash)
+	if profile, ok := getUserProfileFromProcessCache(userID); ok {
+		updated := cloneUser(profile)
+		updated.IconHash = hash
+		writeThroughUserProfileCache(updated)
+		return nil
+	}
+
+	var userModel UserModel
+	if err := dbConn.GetContext(ctx, &userModel, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+	themeModel, err := themeForUser(ctx, dbConn, userID)
+	if err != nil {
+		return err
+	}
+	writeThroughUserProfileCache(&User{
+		ID:          userModel.ID,
+		Name:        userModel.Name,
+		DisplayName: userModel.DisplayName,
+		Description: userModel.Description,
+		Theme: Theme{
+			ID:       themeModel.ID,
+			DarkMode: themeModel.DarkMode,
+		},
+		IconHash: hash,
+	})
 	return nil
 }
 
@@ -511,6 +544,7 @@ func loadUserProfileFromDB(ctx context.Context, q readQueryer, userModel UserMod
 	}, nil
 }
 
+// writeThroughUserProfileCacheFromDB reloads user+theme+icon from MySQL then write-through (tests / cold refresh).
 func writeThroughUserProfileCacheFromDB(ctx context.Context, userID int64) error {
 	var userModel UserModel
 	if err := dbConn.GetContext(ctx, &userModel, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
