@@ -1,5 +1,5 @@
 DARWIN_TARGET_ENV=GOOS=darwin GOARCH=arm64
-LINUX_TARGET_ENV=GOOS=linux GOARCH=amd64
+LINUX_TARGET_ENV=GOOS=linux GOARCH=amd64 GOAMD64=v2
 
 BUILD=go build
 
@@ -13,7 +13,7 @@ TAG=isupipe:latest
 
 .PHONY: build
 build:
-	CGO_ENABLED=0 $(LINUX_TARGET_ENV)  $(BUILD) -o $(DESTDIR)/isupipe -ldflags "-s -w"
+	CGO_ENABLED=0 $(LINUX_TARGET_ENV) $(BUILD) -o $(DESTDIR)/isupipe -ldflags "-s -w"
 
 .PHONY: darwin
 darwin:
