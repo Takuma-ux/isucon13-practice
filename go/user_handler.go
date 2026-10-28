@@ -315,6 +315,7 @@ func getIconHandler(c echo.Context) error {
 func postIconHandler(c echo.Context) error {
 	ctx := c.Request().Context()
 	ctx = withResponseCache(ctx)
+	defer c.Request().Body.Close()
 
 	if err := verifyUserSession(c); err != nil {
 		// echo.NewHTTPErrorが返っているのでそのまま出力
