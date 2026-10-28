@@ -207,12 +207,11 @@ func searchLivestreamsHandler(c echo.Context) error {
 			return c.JSON(http.StatusOK, []Livestream{})
 		}
 
-		limitParam := c.QueryParam("limit")
-		if limitParam != "" {
-			limit, err := strconv.Atoi(limitParam)
-			if err != nil {
-				return echo.NewHTTPError(http.StatusBadRequest, "limit query parameter must be integer")
-			}
+		limit, hasLimit, limitErr := parsePositiveLimitQuery(c)
+		if limitErr != nil {
+			return limitErr
+		}
+		if hasLimit {
 			// LIMIT in SQL: avoid scanning all tag associations when only top-N livestreams are needed.
 			query, params, err := sqlx.In(`
 				SELECT * FROM livestreams
@@ -257,11 +256,9 @@ func searchLivestreamsHandler(c echo.Context) error {
 	} else {
 		// 検索条件なし
 		query := `SELECT * FROM livestreams ORDER BY id DESC`
-		if c.QueryParam("limit") != "" {
-			limit, err := strconv.Atoi(c.QueryParam("limit"))
-			if err != nil {
-				return echo.NewHTTPError(http.StatusBadRequest, "limit query parameter must be integer")
-			}
+		if limit, hasLimit, limitErr := parsePositiveLimitQuery(c); limitErr != nil {
+			return limitErr
+		} else if hasLimit {
 			query += fmt.Sprintf(" LIMIT %d", limit)
 		}
 

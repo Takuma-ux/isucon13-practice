@@ -52,11 +52,9 @@ func getReactionsHandler(c echo.Context) error {
 	}
 
 	query := "SELECT * FROM reactions WHERE livestream_id = ? ORDER BY created_at DESC"
-	if c.QueryParam("limit") != "" {
-		limit, err := strconv.Atoi(c.QueryParam("limit"))
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "limit query parameter must be integer")
-		}
+	if limit, hasLimit, limitErr := parsePositiveLimitQuery(c); limitErr != nil {
+		return limitErr
+	} else if hasLimit {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
 

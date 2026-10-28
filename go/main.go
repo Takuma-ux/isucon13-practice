@@ -142,8 +142,11 @@ func initializeHandler(c echo.Context) error {
 	if err := warmThemeCache(c.Request().Context()); err != nil {
 		c.Logger().Warnf("theme cache reload after initialize failed: %v", err)
 	}
+	// Stats must match a fresh DB before any bench load runs. The official bench blocks on initialize
+	// and aborts the attempt on non-200; returning 200 here after rebuild failure would let load run
+	// against wrong in-memory stats (worse than signaling not-ready with 500).
 	if err := rebuildStatsFromDB(c.Request().Context()); err != nil {
-		c.Logger().Warnf("stats rebuild after initialize failed: %v", err)
+		c.Logger().Errorf("stats rebuild after initialize failed: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to rebuild stats: "+err.Error())
 	}
 	// Tags: invalidateTagsCache above is sufficient. getCachedTags (GET /api/tag, search) reloads

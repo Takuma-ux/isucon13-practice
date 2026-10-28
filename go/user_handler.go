@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -551,10 +552,13 @@ func getMeHandler(c echo.Context) error {
 // rollbackRegisteredUser removes a user row created for register when a post-commit step fails (e.g. pdnsutil).
 func rollbackRegisteredUser(ctx context.Context, userID int64) {
 	if _, err := dbConn.ExecContext(ctx, "DELETE FROM themes WHERE user_id = ?", userID); err != nil {
+		log.Printf("ERROR [register] rollback user %d: delete theme: %v", userID, err)
 		return
 	}
 	invalidateThemeCacheUser(userID)
-	_, _ = dbConn.ExecContext(ctx, "DELETE FROM users WHERE id = ?", userID)
+	if _, err := dbConn.ExecContext(ctx, "DELETE FROM users WHERE id = ?", userID); err != nil {
+		log.Printf("ERROR [register] rollback user %d: delete user (theme removed): %v", userID, err)
+	}
 }
 
 // ユーザ登録API

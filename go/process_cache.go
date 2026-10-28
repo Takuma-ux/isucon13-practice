@@ -30,8 +30,9 @@ var (
 	livestreamShellCacheMu sync.RWMutex
 	livestreamShellCache   = make(map[int64]*LivestreamShell)
 
-	assembledLivestreamCacheMu sync.RWMutex
-	assembledLivestreamCache   = make(map[int64]*assembledLivestreamCacheEntry)
+	assembledLivestreamCacheMu    sync.RWMutex
+	assembledLivestreamCache      = make(map[int64]*assembledLivestreamCacheEntry)
+	assembledLivestreamCacheByOwner = make(map[int64]map[int64]struct{}) // owner user_id -> livestream ids
 
 	userProfileCacheMu     sync.RWMutex
 	userProfileCache       = make(map[int64]*User)
@@ -84,17 +85,40 @@ func invalidateUserProfileCache(userID int64) {
 func clearAssembledLivestreamCache() {
 	assembledLivestreamCacheMu.Lock()
 	assembledLivestreamCache = make(map[int64]*assembledLivestreamCacheEntry)
+	assembledLivestreamCacheByOwner = make(map[int64]map[int64]struct{})
 	assembledLivestreamCacheMu.Unlock()
+}
+
+func addAssembledLivestreamOwnerIndexLocked(ownerUserID, livestreamID int64) {
+	if ownerUserID == 0 {
+		return
+	}
+	set, ok := assembledLivestreamCacheByOwner[ownerUserID]
+	if !ok {
+		set = make(map[int64]struct{})
+		assembledLivestreamCacheByOwner[ownerUserID] = set
+	}
+	set[livestreamID] = struct{}{}
+}
+
+func removeAssembledLivestreamOwnerIndexLocked(ownerUserID, livestreamID int64) {
+	set := assembledLivestreamCacheByOwner[ownerUserID]
+	if set == nil {
+		return
+	}
+	delete(set, livestreamID)
+	if len(set) == 0 {
+		delete(assembledLivestreamCacheByOwner, ownerUserID)
+	}
 }
 
 func invalidateAssembledLivestreamCacheForOwner(ownerUserID int64) {
 	assembledLivestreamCacheMu.Lock()
-	for id, ent := range assembledLivestreamCache {
-		if ent != nil && ent.ownerUserID == ownerUserID {
-			delete(assembledLivestreamCache, id)
-		}
+	defer assembledLivestreamCacheMu.Unlock()
+	for livestreamID := range assembledLivestreamCacheByOwner[ownerUserID] {
+		delete(assembledLivestreamCache, livestreamID)
 	}
-	assembledLivestreamCacheMu.Unlock()
+	delete(assembledLivestreamCacheByOwner, ownerUserID)
 }
 
 // writeThroughUserProfileCache bumps epoch (defeating in-flight stale fills) and stores the authoritative profile.
@@ -272,11 +296,15 @@ func putAssembledLivestreamCache(ls *Livestream) {
 	ownerEpoch := snapshotUserProfileCacheEpoch(ownerID)
 	stored := cloneLivestream(ls)
 	assembledLivestreamCacheMu.Lock()
+	if prev := assembledLivestreamCache[ls.ID]; prev != nil && prev.ownerUserID != ownerID {
+		removeAssembledLivestreamOwnerIndexLocked(prev.ownerUserID, ls.ID)
+	}
 	assembledLivestreamCache[ls.ID] = &assembledLivestreamCacheEntry{
 		livestream:  stored,
 		ownerUserID: ownerID,
 		ownerEpoch:  ownerEpoch,
 	}
+	addAssembledLivestreamOwnerIndexLocked(ownerID, ls.ID)
 	assembledLivestreamCacheMu.Unlock()
 }
 

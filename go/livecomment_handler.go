@@ -81,11 +81,9 @@ func getLivecommentsHandler(c echo.Context) error {
 
 	// Read-only path: no transaction (same tolerance as search GET). Fill uses autocommit SELECTs.
 	query := "SELECT * FROM livecomments WHERE livestream_id = ? ORDER BY created_at DESC"
-	if c.QueryParam("limit") != "" {
-		limit, err := strconv.Atoi(c.QueryParam("limit"))
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "limit query parameter must be integer")
-		}
+	if limit, hasLimit, limitErr := parsePositiveLimitQuery(c); limitErr != nil {
+		return limitErr
+	} else if hasLimit {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
 
