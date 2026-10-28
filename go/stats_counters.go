@@ -183,7 +183,10 @@ func statsOnEnter(livestreamID int64) {
 	ensureUserStats(owner).viewers.Add(1)
 }
 
-func statsOnExit(livestreamID int64) {
+func statsOnExit(livestreamID int64, removed int64) {
+	if removed <= 0 {
+		return
+	}
 	statsRebuildMu.RLock()
 	owner, ok := statsLiveOwners[livestreamID]
 	statsRebuildMu.RUnlock()
@@ -192,8 +195,8 @@ func statsOnExit(livestreamID int64) {
 	}
 	statsRebuildMu.RLock()
 	defer statsRebuildMu.RUnlock()
-	ensureLivestreamStats(livestreamID).viewers.Add(-1)
-	ensureUserStats(owner).viewers.Add(-1)
+	ensureLivestreamStats(livestreamID).viewers.Add(-removed)
+	ensureUserStats(owner).viewers.Add(-removed)
 }
 
 func statsOnReportPosted(livestreamID int64) {

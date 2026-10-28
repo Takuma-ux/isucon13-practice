@@ -189,7 +189,7 @@ func TestConcurrentStatsIncrementsRace(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < each; j++ {
 				statsOnEnter(livestreamID)
-				statsOnExit(livestreamID)
+				statsOnExit(livestreamID, 1)
 			}
 		}()
 	}

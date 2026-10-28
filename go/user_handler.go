@@ -251,24 +251,20 @@ func iconHashForUserRow(stored string) string {
 // hash comes from memory and skips the users↔icons JOIN used on cold paths.
 // Icon hash in cache is updated via writeThroughUserProfileCacheFromDB on POST icon and invalidate on epoch rules — same source as API user payloads.
 func resolveUserIconHash(ctx context.Context, username string) (userID int64, iconHash string, err error) {
-	if err := dbConn.GetContext(ctx, &userID, "SELECT id FROM users WHERE name = ?", username); err != nil {
+	userID, err = lookupUserIDByUsername(ctx, username)
+	if err != nil {
 		return 0, "", err
 	}
 	if profile, ok := getUserProfileFromProcessCache(userID); ok {
 		return userID, iconHashForUserRow(profile.IconHash), nil
 	}
-	const iconHashFromUser = `
-		SELECT COALESCE(i.icon_hash, '') AS icon_hash
-		FROM users u
-		LEFT JOIN icons i ON i.user_id = u.id
-		WHERE u.name = ?`
-	var hashRow struct {
-		IconHash string `db:"icon_hash"`
+	iconHash = defaultIconHash
+	if err := dbConn.GetContext(ctx, &iconHash, "SELECT icon_hash FROM icons WHERE user_id = ?", userID); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, "", err
+		}
 	}
-	if err := dbConn.GetContext(ctx, &hashRow, iconHashFromUser, username); err != nil {
-		return 0, "", err
-	}
-	return userID, iconHashForUserRow(hashRow.IconHash), nil
+	return userID, iconHashForUserRow(iconHash), nil
 }
 
 func getIconHandler(c echo.Context) error {
@@ -539,7 +535,7 @@ func getMeHandler(c echo.Context) error {
 	userID := sess.Values[defaultUserIDKey].(int64)
 
 	userModel := UserModel{}
-	if err := dbConn.GetContext(ctx, &userModel, "SELECT * FROM users WHERE id = ?", userID); err != nil {
+	if err := dbConn.GetContext(ctx, &userModel, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the userid in session")
 		}
@@ -708,8 +704,15 @@ func getUserHandler(c echo.Context) error {
 
 	username := c.Param("username")
 
+	userID, err := lookupUserIDByUsername(ctx, username)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
+	}
 	userModel := UserModel{}
-	if err := dbConn.GetContext(ctx, &userModel, "SELECT * FROM users WHERE name = ?", username); err != nil {
+	if err := dbConn.GetContext(ctx, &userModel, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}

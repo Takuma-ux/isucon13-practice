@@ -130,3 +130,16 @@ func statsLookupUserIDByName(username string) (int64, bool) {
 	statsRebuildMu.RUnlock()
 	return id, ok
 }
+
+// lookupUserIDByUsername resolves name→id from in-memory stats maps, then MySQL on miss
+// (e.g. user registered after last rebuild but before statsOnUserRegistered visible to this goroutine — still covered after register).
+func lookupUserIDByUsername(ctx context.Context, username string) (int64, error) {
+	if id, ok := statsLookupUserIDByName(username); ok {
+		return id, nil
+	}
+	var id int64
+	if err := dbConn.GetContext(ctx, &id, "SELECT id FROM users WHERE name = ?", username); err != nil {
+		return 0, err
+	}
+	return id, nil
+}

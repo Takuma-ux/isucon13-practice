@@ -304,8 +304,8 @@ func getUserLivestreamsHandler(c echo.Context) error {
 
 	username := c.Param("username")
 
-	var user UserModel
-	if err := dbConn.GetContext(ctx, &user, "SELECT id FROM users WHERE name = ?", username); err != nil {
+	userID, err := lookupUserIDByUsername(ctx, username)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "user not found")
 		}
@@ -313,7 +313,7 @@ func getUserLivestreamsHandler(c echo.Context) error {
 	}
 
 	var livestreamModels []*LivestreamModel
-	if err := dbConn.SelectContext(ctx, &livestreamModels, "SELECT * FROM livestreams WHERE user_id = ?", user.ID); err != nil {
+	if err := dbConn.SelectContext(ctx, &livestreamModels, "SELECT * FROM livestreams WHERE user_id = ?", userID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get livestreams: "+err.Error())
 	}
 	livestreams, err := fillLivestreamsResponse(ctx, dbConn, livestreamModels)
@@ -393,11 +393,16 @@ func exitLivestreamHandler(c echo.Context) error {
 }
 
 func exitLivestream(ctx context.Context, userID int64, livestreamID int) error {
-	// Single-row DELETE needs no explicit transaction (same as enter autocommit INSERT).
-	if _, err := dbConn.ExecContext(ctx, "DELETE FROM livestream_viewers_history WHERE user_id = ? AND livestream_id = ?", userID, livestreamID); err != nil {
+	// DELETE may remove multiple rows per (user_id, livestream_id); stats must match RowsAffected.
+	res, err := dbConn.ExecContext(ctx, "DELETE FROM livestream_viewers_history WHERE user_id = ? AND livestream_id = ?", userID, livestreamID)
+	if err != nil {
 		return err
 	}
-	statsOnExit(int64(livestreamID))
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	statsOnExit(int64(livestreamID), removed)
 	return nil
 }
 
