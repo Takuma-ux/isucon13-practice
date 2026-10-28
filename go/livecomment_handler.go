@@ -449,11 +449,12 @@ func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngW
 	}
 	defer tx.Rollback()
 
+	createdAt := time.Now().Unix()
 	rs, err := tx.NamedExecContext(ctx, "INSERT INTO ng_words(user_id, livestream_id, word, created_at) VALUES (:user_id, :livestream_id, :word, :created_at)", &NGWord{
 		UserID:       userID,
 		LivestreamID: int64(livestreamID),
 		Word:         ngWord,
-		CreatedAt:    time.Now().Unix(),
+		CreatedAt:    createdAt,
 	})
 	if err != nil {
 		return 0, del, fmt.Errorf("%w: %w", errModerateInsertNGWord, err)
@@ -472,7 +473,13 @@ func moderateLivestream(ctx context.Context, userID int64, livestreamID int, ngW
 	if err := tx.Commit(); err != nil {
 		return 0, del, fmt.Errorf("%w: %w", errModerateCommit, err)
 	}
-	invalidateNGWordsCacheForOwnerLivestream(ownerID, int64(livestreamID))
+	mergeNGWordIntoCacheAfterModerate(ownerID, int64(livestreamID), NGWord{
+		ID:           wordID,
+		UserID:       userID,
+		LivestreamID: int64(livestreamID),
+		Word:         ngWord,
+		CreatedAt:    createdAt,
+	})
 	statsOnModerateDeleted(ctx, int64(livestreamID), ownerID, del)
 	return wordID, del, nil
 }

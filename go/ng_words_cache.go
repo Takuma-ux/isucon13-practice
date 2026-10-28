@@ -33,6 +33,21 @@ func invalidateNGWordsCacheForOwnerLivestream(ownerUserID, livestreamID int64) {
 	ngWordsCacheMu.Unlock()
 }
 
+// mergeNGWordIntoCacheAfterModerate prepends the new word when the cache is warm (avoids SELECT on next spam check);
+// if cold, bumps epoch only (same as invalidate) so the next load refetches the full list from MySQL.
+func mergeNGWordIntoCacheAfterModerate(ownerUserID, livestreamID int64, word NGWord) {
+	key := ngWordsCacheKey{ownerUserID: ownerUserID, livestreamID: livestreamID}
+	ngWordsCacheMu.Lock()
+	defer ngWordsCacheMu.Unlock()
+	ngWordsCacheEpoch[key]++
+	if existing, ok := ngWordsCache[key]; ok {
+		combined := append([]NGWord{word}, existing...)
+		ngWordsCache[key] = cloneNGWords(combined)
+		return
+	}
+	delete(ngWordsCache, key)
+}
+
 func snapshotNGWordsCacheEpoch(key ngWordsCacheKey) uint64 {
 	ngWordsCacheMu.RLock()
 	epoch := ngWordsCacheEpoch[key]

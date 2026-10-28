@@ -105,6 +105,14 @@ func ensureLivestreamStats(livestreamID int64) *livestreamStatCounters {
 	return ls
 }
 
+// statsOwnerUserIDForLivestream returns the owner user id from in-memory stats maps (no MySQL).
+func statsOwnerUserIDForLivestream(livestreamID int64) (int64, bool) {
+	statsRebuildMu.RLock()
+	owner, ok := statsLiveOwners[livestreamID]
+	statsRebuildMu.RUnlock()
+	return owner, ok
+}
+
 // statsRegisterLivestream adds a new livestream row to in-memory rank sets (zero counters).
 func statsRegisterLivestream(livestreamID, ownerUserID int64) {
 	statsRebuildMu.Lock()

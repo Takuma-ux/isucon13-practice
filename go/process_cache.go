@@ -225,8 +225,11 @@ func getLivestreamModelByID(ctx context.Context, q readQueryer, livestreamID int
 	return coalescedLoadLivestreamRow(ctx, q, livestreamID)
 }
 
-// ownerUserIDForLivestream returns the stream owner user ID, using the process shell when present.
+// ownerUserIDForLivestream returns the stream owner user ID, using stats maps then process shell before SELECT.
 func ownerUserIDForLivestream(ctx context.Context, q readQueryer, livestreamID int64) (int64, error) {
+	if owner, ok := statsOwnerUserIDForLivestream(livestreamID); ok {
+		return owner, nil
+	}
 	if shell, ok := getLivestreamShellFromProcessCache(livestreamID); ok {
 		return shell.OwnerUserID, nil
 	}
