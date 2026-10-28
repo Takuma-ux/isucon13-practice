@@ -139,6 +139,9 @@ func initializeHandler(c echo.Context) error {
 	}
 	invalidateTagsCache()
 	invalidateProcessReadCaches()
+	if err := warmThemeCache(c.Request().Context()); err != nil {
+		c.Logger().Warnf("theme cache reload after initialize failed: %v", err)
+	}
 	if err := rebuildStatsFromDB(c.Request().Context()); err != nil {
 		c.Logger().Warnf("stats rebuild after initialize failed: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to rebuild stats: "+err.Error())
@@ -256,6 +259,9 @@ func main() {
 		e.Logger.Warnf("tags cache prewarm failed (first /api/tag will retry): %v", err)
 	} else {
 		e.Logger.Infof("tags cache prewarmed (%d tags)", len(tagsCache.Tags))
+	}
+	if err := warmThemeCache(context.Background()); err != nil {
+		e.Logger.Warnf("theme cache prewarm failed (first theme GET will retry): %v", err)
 	}
 
 	subdomainAddr, ok := os.LookupEnv(powerDNSSubdomainAddressEnvKey)

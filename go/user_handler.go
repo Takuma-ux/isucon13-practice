@@ -440,13 +440,9 @@ func loadUserProfilesFromDBByIDs(ctx context.Context, q readQueryer, userIDs []i
 		userByID[row.ID] = row
 	}
 
-	var themeRows []ThemeModel
-	if err := selectIn(ctx, q, &themeRows, "SELECT * FROM themes WHERE user_id IN (?)", userIDs); err != nil {
+	themeByUser, err := themesForUsers(ctx, q, userIDs)
+	if err != nil {
 		return nil, err
-	}
-	themeByUser := make(map[int64]ThemeModel, len(themeRows))
-	for _, row := range themeRows {
-		themeByUser[row.UserID] = row
 	}
 
 	var iconRows []struct {
@@ -490,8 +486,8 @@ func loadUserProfilesFromDBByIDs(ctx context.Context, q readQueryer, userIDs []i
 }
 
 func loadUserProfileFromDB(ctx context.Context, q readQueryer, userModel UserModel) (User, error) {
-	themeModel := ThemeModel{}
-	if err := q.GetContext(ctx, &themeModel, "SELECT * FROM themes WHERE user_id = ?", userModel.ID); err != nil {
+	themeModel, err := themeForUser(ctx, q, userModel.ID)
+	if err != nil {
 		return User{}, err
 	}
 
@@ -563,6 +559,7 @@ func rollbackRegisteredUser(ctx context.Context, userID int64) {
 	if _, err := dbConn.ExecContext(ctx, "DELETE FROM themes WHERE user_id = ?", userID); err != nil {
 		return
 	}
+	invalidateThemeCacheUser(userID)
 	_, _ = dbConn.ExecContext(ctx, "DELETE FROM users WHERE id = ?", userID)
 }
 
@@ -616,9 +613,15 @@ func registerHandler(c echo.Context) error {
 		UserID:   userID,
 		DarkMode: req.Theme.DarkMode,
 	}
-	if _, err := tx.NamedExecContext(ctx, "INSERT INTO themes (user_id, dark_mode) VALUES(:user_id, :dark_mode)", themeModel); err != nil {
+	themeRs, err := tx.NamedExecContext(ctx, "INSERT INTO themes (user_id, dark_mode) VALUES(:user_id, :dark_mode)", themeModel)
+	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to insert user theme: "+err.Error())
 	}
+	themeID, err := themeRs.LastInsertId()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get last inserted theme id: "+err.Error())
+	}
+	themeModel.ID = themeID
 
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to commit: "+err.Error())
@@ -632,6 +635,7 @@ func registerHandler(c echo.Context) error {
 
 	// Post-commit (and after pdns): user row is durable; register must appear in stats maps like rebuildStatsFromDB.
 	statsOnUserRegistered(userID, req.Name)
+	writeThroughThemeCache(themeModel)
 
 	user, err := fillUserResponse(ctx, dbConn, userModel)
 	if err != nil {

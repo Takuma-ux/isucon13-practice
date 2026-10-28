@@ -52,6 +52,7 @@ func invalidateProcessReadCaches() {
 
 	clearIconImageCache()
 	clearNGWordsCache()
+	clearThemeCache()
 }
 
 func snapshotUserProfileCacheEpoch(userID int64) uint64 {
