@@ -25,14 +25,16 @@ type TagsResponse struct {
 }
 
 var (
-	tagsCacheMu sync.RWMutex
-	tagsCache   *TagsResponse
+	tagsCacheMu   sync.RWMutex
+	tagsCache     *TagsResponse
+	tagsByIDCache map[int64]Tag // built with tagsCache; same lifetime (cleared on initialize)
 )
 
 // invalidateTagsCache clears the in-memory tag list (e.g. after POST /api/initialize).
 func invalidateTagsCache() {
 	tagsCacheMu.Lock()
 	tagsCache = nil
+	tagsByIDCache = nil
 	tagsCacheMu.Unlock()
 }
 
@@ -73,17 +75,28 @@ func lookupTagIDsByName(ctx context.Context, name string) ([]int, error) {
 	return ids, nil
 }
 
-// tagByIDMapFromCache returns all tags keyed by id (same rows as SELECT * FROM tags WHERE id IN (...)).
-func tagByIDMapFromCache(ctx context.Context) (map[int64]Tag, error) {
-	tagsResponse, err := getCachedTags(ctx)
-	if err != nil {
-		return nil, err
-	}
+func buildTagsByIDMap(tagsResponse *TagsResponse) map[int64]Tag {
 	tagByID := make(map[int64]Tag, len(tagsResponse.Tags))
 	for _, tag := range tagsResponse.Tags {
 		tagByID[tag.ID] = *tag
 	}
+	return tagByID
+}
+
+// tagByIDMapFromCache returns all tags keyed by id (same rows as SELECT * FROM tags WHERE id IN (...)).
+func tagByIDMapFromCache(ctx context.Context) (map[int64]Tag, error) {
+	if err := warmTagsByIDCache(ctx); err != nil {
+		return nil, err
+	}
+	tagsCacheMu.RLock()
+	tagByID := tagsByIDCache
+	tagsCacheMu.RUnlock()
 	return tagByID, nil
+}
+
+func warmTagsByIDCache(ctx context.Context) error {
+	_, err := getCachedTags(ctx)
+	return err
 }
 
 func getCachedTags(ctx context.Context) (*TagsResponse, error) {
@@ -105,6 +118,7 @@ func getCachedTags(ctx context.Context) (*TagsResponse, error) {
 		return nil, err
 	}
 	tagsCache = loaded
+	tagsByIDCache = buildTagsByIDMap(loaded)
 	return tagsCache, nil
 }
 

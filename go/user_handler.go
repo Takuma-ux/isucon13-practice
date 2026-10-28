@@ -534,17 +534,12 @@ func getMeHandler(c echo.Context) error {
 	// existence already checked
 	userID := sess.Values[defaultUserIDKey].(int64)
 
-	userModel := UserModel{}
-	if err := dbConn.GetContext(ctx, &userModel, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
+	user, err := userResponseByID(ctx, userID)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the userid in session")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
-	}
-
-	user, err := fillUserResponse(ctx, dbConn, userModel)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill user: "+err.Error())
 	}
 
 	return c.JSON(http.StatusOK, user)
@@ -711,17 +706,13 @@ func getUserHandler(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
 	}
-	userModel := UserModel{}
-	if err := dbConn.GetContext(ctx, &userModel, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
+
+	user, err := userResponseByID(ctx, userID)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
-	}
-
-	user, err := fillUserResponse(ctx, dbConn, userModel)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fill user: "+err.Error())
 	}
 
 	return c.JSON(http.StatusOK, user)
@@ -799,6 +790,23 @@ func cacheLivestream(ctx context.Context, id int64, livestream *Livestream) {
 	if v := ctx.Value(responseCacheKey{}); v != nil {
 		v.(*responseCache).livestreams[id] = livestream
 	}
+}
+
+// userResponseByID returns the API user payload, using request/process caches before MySQL.
+func userResponseByID(ctx context.Context, userID int64) (User, error) {
+	if cached, ok := getUserFromCache(ctx, userID); ok {
+		return *cached, nil
+	}
+	if profile, ok := getUserProfileFromProcessCache(userID); ok {
+		cacheUser(ctx, userID, profile)
+		return *profile, nil
+	}
+
+	userModel := UserModel{}
+	if err := dbConn.GetContext(ctx, &userModel, "SELECT id, name, display_name, description FROM users WHERE id = ?", userID); err != nil {
+		return User{}, err
+	}
+	return fillUserResponse(ctx, dbConn, userModel)
 }
 
 func fillUserResponse(ctx context.Context, q readQueryer, userModel UserModel) (User, error) {
