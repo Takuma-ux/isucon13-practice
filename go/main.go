@@ -291,6 +291,10 @@ func main() {
 	e.Server.IdleTimeout = httpIdleTimeout
 	// Default MaxHeaderBytes (1 MiB) is ample for session cookie + normal API headers.
 	go func() {
+		http.HandleFunc("/debug/deadlock-retries", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = fmt.Fprintf(w, "%d\n", MySQLDeadlockRetryCount())
+		})
 		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
 	}()
 

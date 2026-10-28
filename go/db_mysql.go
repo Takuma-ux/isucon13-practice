@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -15,6 +16,19 @@ type readQueryer interface {
 }
 
 const maxMySQLDeadlockRetries = 3
+
+// mysqlDeadlockRetryCount is the number of MySQL 1213 retries taken (observability only).
+var mysqlDeadlockRetryCount atomic.Int64
+
+func MySQLDeadlockRetryCount() int64 {
+	return mysqlDeadlockRetryCount.Load()
+}
+
+func noteMySQLDeadlockRetry(attempt int) {
+	if attempt+1 < maxMySQLDeadlockRetries {
+		mysqlDeadlockRetryCount.Add(1)
+	}
+}
 
 func isMySQLDeadlock(err error) bool {
 	var me *mysql.MySQLError
@@ -32,6 +46,7 @@ func withMySQLDeadlockRetry(fn func() error) error {
 			return nil
 		}
 		if isMySQLDeadlock(lastErr) {
+			noteMySQLDeadlockRetry(attempt)
 			continue
 		}
 		return lastErr
@@ -48,6 +63,7 @@ func withMySQLDeadlockRetryInt64(fn func() (int64, error)) (int64, error) {
 			return v, nil
 		}
 		if isMySQLDeadlock(lastErr) {
+			noteMySQLDeadlockRetry(attempt)
 			continue
 		}
 		return 0, lastErr
