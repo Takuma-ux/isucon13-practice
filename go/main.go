@@ -5,15 +5,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -33,6 +36,8 @@ const (
 	httpReadHeaderTimeout = 10 * time.Second
 	// Nginx client keepalive_timeout is 65s; upstream keepalive default is 60s — stay open slightly longer on the app side.
 	httpIdleTimeout = 75 * time.Second
+	// Allow in-flight handlers (e.g. POST fill) to finish on SIGTERM from systemd restart.
+	httpShutdownTimeout = 15 * time.Second
 
 	// Largest bench POST /api/icon JSON is ~229KiB (embedded JPEG as base64 in JSON; see isucon13 IconSched images).
 	// ~3× headroom for legitimate uploads; rejects oversized bodies before JSON decode.
@@ -288,9 +293,23 @@ func main() {
 	go func() {
 		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
 	}()
-	if err := e.Start(listenAddr); err != nil {
-		e.Logger.Errorf("failed to start HTTP server: %v", err)
-		os.Exit(1)
+
+	go func() {
+		if err := e.Start(listenAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			e.Logger.Errorf("HTTP server: %v", err)
+			os.Exit(1)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	sig := <-quit
+	e.Logger.Infof("received signal %v, shutting down HTTP server (timeout %s)", sig, httpShutdownTimeout)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+	defer cancel()
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		e.Logger.Errorf("HTTP server shutdown: %v", err)
 	}
 }
 
