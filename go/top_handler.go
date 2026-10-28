@@ -153,6 +153,10 @@ func getStreamerThemeHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
 	}
 
+	if profile, ok := getUserProfileFromProcessCache(userID); ok {
+		return c.JSON(http.StatusOK, profile.Theme)
+	}
+
 	themeModel, err := themeForUser(ctx, dbConn, userID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -23,7 +23,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"sort"
 	"sync"
 	"sync/atomic"
 )
@@ -129,15 +128,16 @@ func statsOnUserRegistered(userID int64, username string) {
 func statsOnLivecommentPosted(ownerUserID, livestreamID int64, tip int64) {
 	statsRebuildMu.RLock()
 	defer statsRebuildMu.RUnlock()
-	ensureLivestreamStats(livestreamID).comments.Add(1)
-	ensureLivestreamStats(livestreamID).tips.Add(tip)
-	ensureUserStats(ownerUserID).comments.Add(1)
-	ensureUserStats(ownerUserID).tips.Add(tip)
+	ls := ensureLivestreamStats(livestreamID)
+	owner := ensureUserStats(ownerUserID)
+	ls.comments.Add(1)
+	ls.tips.Add(tip)
+	owner.comments.Add(1)
+	owner.tips.Add(tip)
 	statsPaymentTotalTips.Add(tip)
 
 	mu := livestreamMaxTipLock(livestreamID)
 	mu.Lock()
-	ls := ensureLivestreamStats(livestreamID)
 	if tip > ls.maxTip {
 		ls.maxTip = tip
 	}
@@ -147,12 +147,13 @@ func statsOnLivecommentPosted(ownerUserID, livestreamID int64, tip int64) {
 func statsOnReactionPosted(ownerUserID, livestreamID int64, emojiName string) {
 	statsRebuildMu.RLock()
 	defer statsRebuildMu.RUnlock()
-	ensureLivestreamStats(livestreamID).reactions.Add(1)
-	ensureUserStats(ownerUserID).reactions.Add(1)
-	u := ensureUserStats(ownerUserID)
-	u.emoji.mu.Lock()
-	u.emoji.counts[emojiName]++
-	u.emoji.mu.Unlock()
+	ls := ensureLivestreamStats(livestreamID)
+	owner := ensureUserStats(ownerUserID)
+	ls.reactions.Add(1)
+	owner.reactions.Add(1)
+	owner.emoji.mu.Lock()
+	owner.emoji.counts[emojiName]++
+	owner.emoji.mu.Unlock()
 }
 
 type moderateDeleteStats struct {
@@ -167,16 +168,17 @@ func statsOnModerateDeleted(ctx context.Context, livestreamID, ownerUserID int64
 	}
 	statsRebuildMu.RLock()
 	defer statsRebuildMu.RUnlock()
-	ensureLivestreamStats(livestreamID).comments.Add(-int64(del.Count))
-	ensureLivestreamStats(livestreamID).tips.Add(-del.TipSum)
-	ensureUserStats(ownerUserID).comments.Add(-int64(del.Count))
-	ensureUserStats(ownerUserID).tips.Add(-del.TipSum)
+	ls := ensureLivestreamStats(livestreamID)
+	owner := ensureUserStats(ownerUserID)
+	ls.comments.Add(-int64(del.Count))
+	ls.tips.Add(-del.TipSum)
+	owner.comments.Add(-int64(del.Count))
+	owner.tips.Add(-del.TipSum)
 	statsPaymentTotalTips.Add(-del.TipSum)
 
 	mu := livestreamMaxTipLock(livestreamID)
 	mu.Lock()
 	defer mu.Unlock()
-	ls := ensureLivestreamStats(livestreamID)
 	if del.MaxDeleted < ls.maxTip {
 		return
 	}
@@ -196,13 +198,11 @@ func statsOnModerateDeleted(ctx context.Context, livestreamID, ownerUserID int64
 
 func statsOnEnter(livestreamID int64) {
 	statsRebuildMu.RLock()
+	defer statsRebuildMu.RUnlock()
 	owner, ok := statsLiveOwners[livestreamID]
-	statsRebuildMu.RUnlock()
 	if !ok {
 		return
 	}
-	statsRebuildMu.RLock()
-	defer statsRebuildMu.RUnlock()
 	ensureLivestreamStats(livestreamID).viewers.Add(1)
 	ensureUserStats(owner).viewers.Add(1)
 }
@@ -212,13 +212,11 @@ func statsOnExit(livestreamID int64, removed int64) {
 		return
 	}
 	statsRebuildMu.RLock()
+	defer statsRebuildMu.RUnlock()
 	owner, ok := statsLiveOwners[livestreamID]
-	statsRebuildMu.RUnlock()
 	if !ok {
 		return
 	}
-	statsRebuildMu.RLock()
-	defer statsRebuildMu.RUnlock()
 	ensureLivestreamStats(livestreamID).viewers.Add(-removed)
 	ensureUserStats(owner).viewers.Add(-removed)
 }
@@ -229,11 +227,8 @@ func statsOnReportPosted(livestreamID int64) {
 	ensureLivestreamStats(livestreamID).reports.Add(1)
 }
 
-func userFavoriteEmoji(userID int64) string {
-	statsRebuildMu.RLock()
-	u, ok := statsUsers[userID]
-	statsRebuildMu.RUnlock()
-	if !ok {
+func userFavoriteEmojiLocked(u *userStatCounters) string {
+	if u == nil {
 		return ""
 	}
 	u.emoji.mu.Lock()
@@ -249,30 +244,43 @@ func userFavoriteEmoji(userID int64) string {
 	return bestEmoji
 }
 
-func computeUserRank(username string) (rank int64, totalReactions int64, userID int64, found bool) {
-	statsRebuildMu.RLock()
-	defer statsRebuildMu.RUnlock()
-	userID, found = statsUsernames[username]
-	if !found {
-		return 0, 0, 0, false
-	}
-	var ranking UserRanking
+// userRankFromScores counts users ranked above username using the same tie-break as UserRanking.Less.
+// Caller must hold statsRebuildMu (at least RLock).
+func userRankFromScores(username string, score int64) int64 {
+	var above int64
 	for _, id := range statsAllUserIDs {
 		name := statsUserNames[id]
-		u := statsUsers[id]
-		if u == nil {
-			ranking = append(ranking, UserRankingEntry{Username: name, Score: 0})
+		if name == username {
 			continue
 		}
-		score := u.reactions.Load() + u.tips.Load()
-		ranking = append(ranking, UserRankingEntry{Username: name, Score: score})
-		if id == userID {
-			totalReactions = u.reactions.Load()
+		var otherScore int64
+		if u := statsUsers[id]; u != nil {
+			otherScore = u.reactions.Load() + u.tips.Load()
+		}
+		if otherScore > score || (otherScore == score && name > username) {
+			above++
 		}
 	}
-	sort.Sort(ranking)
-	rank = userRankFromSorted(ranking, username)
-	return rank, totalReactions, userID, true
+	return above + 1
+}
+
+// livestreamRankFromScores counts streams ranked above livestreamID (tie-break: higher id wins on equal score).
+// Caller must hold statsRebuildMu (at least RLock).
+func livestreamRankFromScores(livestreamID int64, score int64) int64 {
+	var above int64
+	for _, id := range statsAllLiveIDs {
+		if id == livestreamID {
+			continue
+		}
+		var otherScore int64
+		if ls := statsLivestreams[id]; ls != nil {
+			otherScore = ls.reactions.Load() + ls.tips.Load()
+		}
+		if otherScore > score || (otherScore == score && id > livestreamID) {
+			above++
+		}
+	}
+	return above + 1
 }
 
 func userRankFromSorted(ranking UserRanking, username string) int64 {
@@ -287,81 +295,67 @@ func userRankFromSorted(ranking UserRanking, username string) int64 {
 }
 
 func userStatisticsFromMemory(username string) (UserStatistics, error) {
-	rank, totalReactions, userID, found := computeUserRank(username)
+	statsRebuildMu.RLock()
+	defer statsRebuildMu.RUnlock()
+	userID, found := statsUsernames[username]
 	if !found {
 		return UserStatistics{}, errUserStatsNotFound
 	}
-	statsRebuildMu.RLock()
 	u := statsUsers[userID]
-	statsRebuildMu.RUnlock()
-	if u == nil {
-		return UserStatistics{}, errUserStatsNotFound
+	var totalReactions int64
+	var score int64
+	if u != nil {
+		totalReactions = u.reactions.Load()
+		score = totalReactions + u.tips.Load()
+	}
+	rank := userRankFromScores(username, score)
+	var viewers, comments, tips int64
+	if u != nil {
+		viewers = u.viewers.Load()
+		comments = u.comments.Load()
+		tips = u.tips.Load()
 	}
 	return UserStatistics{
 		Rank:              rank,
-		ViewersCount:      u.viewers.Load(),
+		ViewersCount:      viewers,
 		TotalReactions:    totalReactions,
-		TotalLivecomments: u.comments.Load(),
-		TotalTip:          u.tips.Load(),
-		FavoriteEmoji:     userFavoriteEmoji(userID),
+		TotalLivecomments: comments,
+		TotalTip:          tips,
+		FavoriteEmoji:     userFavoriteEmojiLocked(u),
 	}, nil
 }
 
 var errUserStatsNotFound = errors.New("user not found for statistics")
 
-func computeLivestreamRank(livestreamID int64) (rank int64, found bool) {
-	statsRebuildMu.RLock()
-	defer statsRebuildMu.RUnlock()
-	found = false
-	for _, id := range statsAllLiveIDs {
-		if id == livestreamID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return 0, false
-	}
-	var ranking LivestreamRanking
-	for _, id := range statsAllLiveIDs {
-		ls := statsLivestreams[id]
-		var score int64
-		if ls != nil {
-			score = ls.reactions.Load() + ls.tips.Load()
-		}
-		ranking = append(ranking, LivestreamRankingEntry{LivestreamID: id, Score: score})
-	}
-	sort.Sort(ranking)
-	var rankOut int64 = 1
-	for i := len(ranking) - 1; i >= 0; i-- {
-		if ranking[i].LivestreamID == livestreamID {
-			return rankOut, true
-		}
-		rankOut++
-	}
-	return 0, false
-}
-
 func livestreamStatisticsFromMemory(livestreamID int64) (LivestreamStatistics, error) {
-	rank, found := computeLivestreamRank(livestreamID)
-	if !found {
+	statsRebuildMu.RLock()
+	if _, ok := statsLiveOwners[livestreamID]; !ok {
+		statsRebuildMu.RUnlock()
 		return LivestreamStatistics{}, errLivestreamStatsNotFound
 	}
-	statsRebuildMu.RLock()
 	ls := statsLivestreams[livestreamID]
-	statsRebuildMu.RUnlock()
+	var score int64
+	if ls != nil {
+		score = ls.reactions.Load() + ls.tips.Load()
+	}
+	rank := livestreamRankFromScores(livestreamID, score)
 	if ls == nil {
 		ls = &livestreamStatCounters{}
 	}
+	viewers := ls.viewers.Load()
+	reactions := ls.reactions.Load()
+	reports := ls.reports.Load()
+	statsRebuildMu.RUnlock()
+
 	mu := livestreamMaxTipLock(livestreamID)
 	mu.Lock()
 	maxTip := ls.maxTip
 	mu.Unlock()
 	return LivestreamStatistics{
 		Rank:           rank,
-		ViewersCount:   ls.viewers.Load(),
-		TotalReactions: ls.reactions.Load(),
-		TotalReports:   ls.reports.Load(),
+		ViewersCount:   viewers,
+		TotalReactions: reactions,
+		TotalReports:   reports,
 		MaxTip:         maxTip,
 	}, nil
 }
