@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	gojson "github.com/goccy/go-json"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -95,6 +96,18 @@ func largestBenchIconJSONBody(t *testing.T) []byte {
 		t.Logf("using bench icon fixture %s raw=%d json=%d", p, len(raw), len(body))
 		return body
 	}
-	t.Logf("bench 56.jpg not found; using synthetic body %d bytes", benchMaxIconJSONBodyBytes)
-	return bytes.Repeat([]byte("A"), benchMaxIconJSONBodyBytes)
+	t.Logf("bench 56.jpg not found; using synthetic JSON body ~%d bytes", benchMaxIconJSONBodyBytes)
+	// Valid {"image":"<base64>"} payload (raw "A" bytes are not JSON and fail decode before BodyLimit matters).
+	const jsonOverhead = len(`{"image":""}`)
+	rawLen := (benchMaxIconJSONBodyBytes - jsonOverhead) * 3 / 4
+	if rawLen < 1 {
+		rawLen = 1
+	}
+	body, err := gojson.Marshal(struct {
+		Image []byte `json:"image"`
+	}{Image: bytes.Repeat([]byte{'A'}, rawLen)})
+	if err != nil {
+		t.Fatalf("marshal synthetic icon JSON: %v", err)
+	}
+	return body
 }

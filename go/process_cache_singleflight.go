@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	livestreamRowLoadFlight  singleflight.Group
-	userProfileLoadFlight    singleflight.Group
-	livestreamTagsLoadFlight singleflight.Group
+	livestreamRowLoadFlight   singleflight.Group
+	userProfileLoadFlight     singleflight.Group
+	livestreamTagsLoadFlight  singleflight.Group
+	ngWordsLoadFlight         singleflight.Group
 
 	userProfileCoalescedFetchDelayHook func(userID int64) // tests: after DB read, before cache put
 
@@ -138,4 +139,34 @@ func coalescedTagsByLivestreamID(ctx context.Context, q readQueryer, livestreamI
 		return nil, err
 	}
 	return v.(map[int64][]Tag), nil
+}
+
+func ngWordsFlightKey(ownerUserID, livestreamID int64) string {
+	return fmt.Sprintf("ng:%d:%d", ownerUserID, livestreamID)
+}
+
+// coalescedNGWordsForOwnerLivestream deduplicates concurrent ng_words SELECTs for the same stream (POST livecomment spam check).
+func coalescedNGWordsForOwnerLivestream(ctx context.Context, q readQueryer, ownerUserID, livestreamID int64) ([]NGWord, error) {
+	key := ngWordsCacheKey{ownerUserID: ownerUserID, livestreamID: livestreamID}
+	ngWordsCacheMu.RLock()
+	if cached, ok := ngWordsCache[key]; ok {
+		ngWordsCacheMu.RUnlock()
+		return cloneNGWords(cached), nil
+	}
+	ngWordsCacheMu.RUnlock()
+
+	flightKey := ngWordsFlightKey(ownerUserID, livestreamID)
+	v, err, _ := ngWordsLoadFlight.Do(flightKey, func() (interface{}, error) {
+		ngWordsCacheMu.RLock()
+		if cached, ok := ngWordsCache[key]; ok {
+			ngWordsCacheMu.RUnlock()
+			return cloneNGWords(cached), nil
+		}
+		ngWordsCacheMu.RUnlock()
+		return loadNGWordsForOwnerLivestream(ctx, q, ownerUserID, livestreamID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]NGWord), nil
 }

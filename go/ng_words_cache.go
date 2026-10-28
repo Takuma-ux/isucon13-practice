@@ -61,14 +61,11 @@ func cloneNGWords(in []NGWord) []NGWord {
 
 // ngWordsForOwnerLivestream returns NG words for spam check / GET ngwords (owner user_id + livestream_id).
 func ngWordsForOwnerLivestream(ctx context.Context, q readQueryer, ownerUserID, livestreamID int64) ([]NGWord, error) {
-	key := ngWordsCacheKey{ownerUserID: ownerUserID, livestreamID: livestreamID}
+	return coalescedNGWordsForOwnerLivestream(ctx, q, ownerUserID, livestreamID)
+}
 
-	ngWordsCacheMu.RLock()
-	if cached, ok := ngWordsCache[key]; ok {
-		ngWordsCacheMu.RUnlock()
-		return cloneNGWords(cached), nil
-	}
-	ngWordsCacheMu.RUnlock()
+func loadNGWordsForOwnerLivestream(ctx context.Context, q readQueryer, ownerUserID, livestreamID int64) ([]NGWord, error) {
+	key := ngWordsCacheKey{ownerUserID: ownerUserID, livestreamID: livestreamID}
 
 	fillEpoch := snapshotNGWordsCacheEpoch(key)
 
