@@ -255,6 +255,9 @@ func resolveUserIconHash(ctx context.Context, username string) (userID int64, ic
 	if err != nil {
 		return 0, "", err
 	}
+	if u, ok := getUserFromCache(ctx, userID); ok {
+		return userID, iconHashForUserRow(u.IconHash), nil
+	}
 	if profile, ok := getUserProfileFromProcessCache(userID); ok {
 		return userID, iconHashForUserRow(profile.IconHash), nil
 	}

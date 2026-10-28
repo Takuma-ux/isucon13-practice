@@ -157,6 +157,13 @@ func reserveLivestreamHandler(c echo.Context) error {
 	}
 	statsRegisterLivestream(livestreamID, int64(userID))
 
+	// Tags are known from req.Tags at commit time; warm shell so reserve response and first post skip livestream_tags SELECT.
+	tags, err := tagsFromRequestTagIDs(ctx, req.Tags)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to resolve livestream tags: "+err.Error())
+	}
+	putLivestreamShellCache(livestreamShellFromModel(livestreamModel, tags, true))
+
 	// Response fill is read-only; run after commit so reservation row locks are not held during owner/tag SELECTs.
 	livestreams, err := fillLivestreamsResponse(ctx, dbConn, []*LivestreamModel{livestreamModel})
 	if err != nil {
@@ -540,11 +547,45 @@ func fillLivestreamsResponse(ctx context.Context, q readQueryer, livestreamModel
 	return fillLivestreamsResponseUncached(ctx, q, livestreams, uncachedModels, uncachedIDs, uncachedIdx, owners)
 }
 
-// fillLivestreamsResponseUncached completes rows that missed request/process cache (tags SQL + assembly).
-func fillLivestreamsResponseUncached(ctx context.Context, q readQueryer, livestreams []Livestream, uncachedModels []*LivestreamModel, uncachedIDs []int64, uncachedIdx []int, owners map[int64]*User) ([]Livestream, error) {
-	tagsByLivestream, err := tagsByLivestreamID(ctx, q, uncachedIDs)
+// tagsFromRequestTagIDs maps reservation tag IDs to API tags (same tag rows as tagsByLivestreamID after insert).
+func tagsFromRequestTagIDs(ctx context.Context, tagIDs []int64) ([]Tag, error) {
+	if len(tagIDs) == 0 {
+		return []Tag{}, nil
+	}
+	tagByID, err := tagByIDMapFromCache(ctx)
 	if err != nil {
 		return nil, err
+	}
+	tags := make([]Tag, 0, len(tagIDs))
+	for _, id := range tagIDs {
+		tag, ok := tagByID[id]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		tags = append(tags, tag)
+	}
+	return tags, nil
+}
+
+// fillLivestreamsResponseUncached completes rows that missed request/process cache (tags SQL + assembly).
+func fillLivestreamsResponseUncached(ctx context.Context, q readQueryer, livestreams []Livestream, uncachedModels []*LivestreamModel, uncachedIDs []int64, uncachedIdx []int, owners map[int64]*User) ([]Livestream, error) {
+	tagsByLivestream := make(map[int64][]Tag, len(uncachedIDs))
+	needTagSQL := make([]int64, 0, len(uncachedIDs))
+	for _, id := range uncachedIDs {
+		if shell, ok := getLivestreamShellFromProcessCache(id); ok && shell.tagsResolved {
+			tagsByLivestream[id] = cloneTags(shell.Tags)
+			continue
+		}
+		needTagSQL = append(needTagSQL, id)
+	}
+	if len(needTagSQL) > 0 {
+		fromDB, err := tagsByLivestreamID(ctx, q, needTagSQL)
+		if err != nil {
+			return nil, err
+		}
+		for id, tags := range fromDB {
+			tagsByLivestream[id] = tags
+		}
 	}
 	for j, livestreamModel := range uncachedModels {
 		i := uncachedIdx[j]
