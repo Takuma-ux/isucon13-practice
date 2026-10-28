@@ -1,4 +1,6 @@
 # table	index_name	columns	primary_query
+# (schema UNIQUE, not managed here) users.uniq_user_name on (name) — login, lookupUserIDByUsername
+# (schema UNIQUE, not managed here) tags.uniq_tag_name on (name) — search tag name → id (Go: tags cache)
 icons	idx_icons_user_id	user_id	fill / icons by user_id
 icons	idx_icons_user_id_icon_hash	user_id,icon_hash	fillUsersByIDs: SELECT user_id, icon_hash WHERE user_id IN (?)
 themes	idx_themes_user_id	user_id	fillUsersByIDs themes IN

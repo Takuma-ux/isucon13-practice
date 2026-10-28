@@ -3,7 +3,7 @@ $TTL 3600
     0      ; serial
     10800  ; refresh
     3600   ; retry
-    604800 ; xxpire
+    604800 ; expire
     3600   ; ncache
 )
 
